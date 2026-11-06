@@ -97,7 +97,6 @@ fun BottomLayer(s: Still, ctl: FeedController) {
                         val gulps = remember { androidx.compose.runtime.mutableIntStateOf(0) }
                         androidx.compose.runtime.LaunchedEffect(s.leaving) { if (s.leaving.isNotEmpty()) gulps.intValue++ }
                         StillMark(
-                            modifier = Modifier.glass(androidx.compose.foundation.shape.CircleShape, p, ctl.ambient),
                             onClick = { s.sheet = true },
                             energy = { kotlin.math.abs(ctl.velocity) / unit },
                             phase = { ctl.phase / unit },
