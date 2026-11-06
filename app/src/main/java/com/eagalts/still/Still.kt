@@ -303,7 +303,7 @@ class Still(
         if (restore) { reload(force = true); return }
         leaving = ids
         scope.launch {
-            kotlinx.coroutines.delay(760)
+            kotlinx.coroutines.delay(860)
             reload(force = true)
             reloadJob?.join()
             leaving = emptySet()

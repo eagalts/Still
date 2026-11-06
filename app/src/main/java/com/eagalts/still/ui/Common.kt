@@ -41,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -191,3 +193,14 @@ fun RollingCount(n: Int, color: Color) {
         }
     }
 }
+
+/**
+ * Стекло для того, что висит поверх фото (знак, панель выбора, подсказки): полупрозрачная подложка цвета
+ * экрана, окрашенная светом кадров, тонкий световой край и мягкая тень — элемент лежит НА фото, а не
+ * вырезан из них плашкой.
+ */
+fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape, p: Palette, light: Color?): Modifier =
+    this.shadow(16.dp, shape, ambientColor = Color.Black.copy(alpha = 0.16f), spotColor = Color.Black.copy(alpha = 0.22f))
+        .clip(shape)
+        .background(tint(p.sheet, light, 0.14f).copy(alpha = if (p.dark) 0.74f else 0.8f))
+        .border(0.6.dp, Color.White.copy(alpha = if (p.dark) 0.12f else 0.55f), shape)

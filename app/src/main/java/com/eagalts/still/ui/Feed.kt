@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
@@ -194,6 +195,21 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     var pivot by remember { mutableStateOf(Offset.Zero) }
     var anchor by remember { mutableStateOf<Pair<Long, Float>?>(null) }   // кадр под пальцами и его доля по высоте
     var pendingScale by remember { mutableStateOf<Float?>(null) }
+    // фото под строкой состояния? тогда значки светлые и под ними тень; лента короче экрана — как обычно
+    val topPx = with(density) { top.toPx() }
+    val overPhotos by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val first = ctl.grid.layoutInfo.visibleItemsInfo.firstOrNull()
+            first != null && first.offset.y - ctl.grid.layoutInfo.viewportStartOffset < topPx * 0.5f && s.filter == null
+        }
+    }
+    val lightTheme = !p.dark
+    androidx.compose.runtime.DisposableEffect(overPhotos, lightTheme, s.viewing == null) {
+        val w = (view.context as? android.app.Activity)?.window
+        if (w != null && s.viewing == null) androidx.core.view.WindowCompat.getInsetsController(w, view)
+            .isAppearanceLightStatusBars = lightTheme && !overPhotos
+        onDispose { }
+    }
     // остановилась — плитки пружинят обратно, с небольшим перелётом (желе), и считается цвет экрана
     LaunchedEffect(Unit) {
         snapshotFlow { ctl.grid.isScrollInProgress }.collect { moving ->
@@ -361,7 +377,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 }
             }
     ) {
-        val padTop = top + 8.dp + 52.dp * capsule
+        // фото идут под строку состояния; место сверху — только под капсулу фильтра
+        // пружина капсулы проскакивает ноль — отступ отрицательным не бывает
+        val padTop = (top + 56.dp) * capsule.coerceIn(0f, 1f)
         LazyVerticalGrid(
             columns = GridCells.Fixed(feed.cols),
             state = ctl.grid,
@@ -373,9 +391,10 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
                 )
             },
-            contentPadding = PaddingValues(top = padTop, bottom = bottom + 96.dp),
+            contentPadding = PaddingValues(top = padTop, bottom = bottom),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols)),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols)),
+            // кадров меньше, чем экран, — они лежат внизу, у знака, а не висят сверху
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols), Alignment.Bottom),
         ) {
             if (s.filter == Filter.Flow) {
                 val old = s.oldScreens()
@@ -404,13 +423,11 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             }
         }
         if (s.loaded && feed.cells.isEmpty()) Empty(s.filter)
-        // дымка под строкой состояния: время и батарея читаются поверх любого кадра
-        Box(
-            Modifier.fillMaxWidth().height(top + 12.dp)
-                .drawBehind {
-                    val c = tint(p.page, ambient)
-                    drawRect(Brush.verticalGradient(listOf(c.copy(alpha = 0.9f), c.copy(alpha = 0f))))
-                }
+        // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
+        val scrim by animateFloatAsState(if (overPhotos) 1f else 0f, tween(220), label = "scrim")
+        if (scrim > 0.001f) Box(
+            Modifier.fillMaxWidth().height(top + 20.dp).graphicsLayer { alpha = scrim }
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.34f), Color.Black.copy(alpha = 0f))))
         )
         FilterCapsule(s, top, capsule)
         FastScroll(s, ctl, top, bottom)
@@ -451,7 +468,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     val radius = radiusFor(cols)
 
     val pick by animateFloatAsState(if (selected) 1f else 0f, fineSpring(0.62f, 700f), label = "pick")
-    val gone by animateFloatAsState(if (leaving) 1f else 0f, if (leaving) tween(720, easing = androidx.compose.animation.core.LinearEasing) else tween(0), label = "gone")
+    val gone by animateFloatAsState(if (leaving) 1f else 0f, if (leaving) tween(820, easing = androidx.compose.animation.core.LinearEasing) else tween(0), label = "gone")
 
     // кадры раскрытой стопки разлетаются из обложки по очереди и складываются обратно
     val fan = remember(c.entry.key, item.id) { Animatable(if (c.inStack && ctl.fanKey == c.entry.key) 0f else 1f) }
@@ -476,7 +493,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
 
     val spot = remember { Spot() }
     val unit = with(density) { 56.dp.toPx() }
-    val spread = with(density) { 26.dp.toPx() }
+    val spread = with(density) { 14.dp.toPx() }
     BoxWithConstraints(
         modifier.zIndex(if (leaving) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
             .onPlaced { val o = it.positionInParent(); spot.x = o.x; spot.y = o.y; spot.w = it.size.width.toFloat(); spot.h = it.size.height.toFloat() }
@@ -491,15 +508,17 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 translationX = fanFrom.x * (1f - f)
                 translationY = fanFrom.y * (1f - f) - v * rel * spread * 2f
                 rotationZ = (1f - f) * (if (order % 2 == 0) 7f else -7f)
+                // ряды расходятся меньше, чем тянется кадр, — полотно не рвётся, кадры чуть наползают друг на друга
                 val k = lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
-                scaleX = (k * (1f - 0.06f * av)).coerceAtLeast(0f)
-                scaleY = (k * (1f + 0.16f * av)).coerceAtLeast(0f)
+                scaleX = k.coerceAtLeast(0f)
+                scaleY = (k * (1f + 0.09f * av)).coerceAtLeast(0f)
                 alpha = if (hidden) 0f else f.coerceIn(0f, 1f)
             }
     ) {
         val px = with(density) { maxWidth.roundToPx() }
         val bmp = rememberThumb(s, item, px)
         val shown by animateFloatAsState(if (bmp.value != null) 1f else 0f, if (bmp.fresh) tween(140) else tween(0), label = "load")
+        val dust = remember(leaving, bmp.value) { if (leaving) bmp.value?.let(::dustOf) else null }
         // в мозаике у стопки нет «листов» над обложкой (они рвали полотно щелью) — её выдаёт счётчик
         val stackDepth = 0f
         Spacer(
@@ -517,7 +536,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 if (gone > 0f && b != null) {
                     // удалённый кадр рассыпается на пиксели, и они стекают в знак
                     val target = dissolveTarget(ctl, spot)
-                    drawDissolve(b, area, gone, target)
+                    drawDust(b, dust, area, gone, target)
                     return@drawBehind
                 }
                 if (b != null && shown > 0f) clipPath(androidx.compose.ui.graphics.Path().apply { addOutline(squircleOutline(area.left, area.top, area.right, area.bottom, r)) }) {
@@ -778,34 +797,45 @@ private fun DrawScope.dissolveTarget(ctl: FeedController, spot: Spot): Offset {
     return mark - Offset(spot.x + spot.w / 2f, spot.y + spot.h / 2f)
 }
 
+/** Цвета пыли: миниатюра, сжатая до [n]×[n], — по частице на клетку. Считается один раз, когда кадр начал уходить. */
+fun dustOf(b: ImageBitmap, n: Int = DustGrid): IntArray? = runCatching {
+    val src = b.asAndroidBitmap().let { if (it.config == Bitmap.Config.HARDWARE) it.copy(Bitmap.Config.ARGB_8888, false) else it }
+    val small = Bitmap.createScaledBitmap(src, n, n, true)
+    IntArray(n * n).also { small.getPixels(it, 0, n, 0, 0, n, n) }
+}.getOrNull()
+
+const val DustGrid = 20
+
 /**
- * Распад кадра: сетка блоков, каждый со своей задержкой (сначала ближние к знаку), падает с ускорением
- * к знаку, уменьшаясь и тая. Рисуется кусками той же миниатюры — без копий и аллокаций битмапов.
+ * Распад кадра в пыль: в первые мгновения кадр тает, а на его месте остаются частицы его же цветов
+ * (по одной на клетку 20×20). Каждая со своей задержкой — сначала нижние — сдувается вбок и вверх и по дуге
+ * с ускорением втягивается в знак, уменьшаясь до точки. Аллокаций в кадре нет: цвета посчитаны заранее.
  */
-private fun DrawScope.drawDissolve(b: ImageBitmap, area: Rect, t: Float, target: Offset) {
-    val n = 9
-    val k = maxOf(area.width / b.width, area.height / b.height)
-    val sw = area.width / k; val sh = area.height / k
-    val sx = (b.width - sw) / 2f; val sy = (b.height - sh) / 2f
-    val bw = area.width / n; val bh = area.height / n
+private fun DrawScope.drawDust(b: ImageBitmap, dust: IntArray?, area: Rect, t: Float, target: Offset) {
+    // сам кадр тает за первую четверть
+    val img = (1f - t * 4f).coerceIn(0f, 1f)
+    if (img > 0f) drawCover(b, area, img)
+    val cols = dust ?: return
+    val n = DustGrid
+    val cw = area.width / n; val ch = area.height / n
+    val end = Offset(target.x + area.width / 2f, target.y + area.height / 2f)
+    val lift = 46.dp.toPx(); val side = 38.dp.toPx(); val tiny = 1.2.dp.toPx()
     for (j in 0 until n) for (i in 0 until n) {
-        // нижние и центральные блоки уходят первыми
-        val d = ((n - 1 - j) + abs(i - n / 2) * 0.6f) / (n * 1.6f) * 0.45f
-        val p = ((t - d) / 0.55f).coerceIn(0f, 1f)
+        val h = ((i * 73 + j * 151) % 97) / 97f          // своё «случайное» для частицы, без Random
+        val d = ((n - 1 - j).toFloat() / n) * 0.28f + h * 0.12f
+        val p = ((t - d) / 0.6f).coerceIn(0f, 1f)
         if (p >= 1f) continue
-        val e = p * p
-        val x0 = area.left + i * bw; val y0 = area.top + j * bh
-        val wob = kotlin.math.sin((i * 7 + j * 13).toFloat()) * 10.dp.toPx() * p * (1f - p)
-        val cx = x0 + bw / 2f + (target.x + area.width / 2f - (x0 + bw / 2f)) * e + wob
-        val cy = y0 + bh / 2f + (target.y + area.height / 2f - (y0 + bh / 2f)) * e
-        val sc = 1f - 0.75f * p
-        drawImage(
-            b,
-            srcOffset = IntOffset((sx + i * sw / n).roundToInt(), (sy + j * sh / n).roundToInt()),
-            srcSize = IntSize((sw / n).roundToInt().coerceAtLeast(1), (sh / n).roundToInt().coerceAtLeast(1)),
-            dstOffset = IntOffset((cx - bw * sc / 2f).roundToInt(), (cy - bh * sc / 2f).roundToInt()),
-            dstSize = IntSize((bw * sc).roundToInt().coerceAtLeast(1), (bh * sc).roundToInt().coerceAtLeast(1)),
-            alpha = (1f - p * p).coerceIn(0f, 1f),
-        )
+        val x0 = area.left + (i + 0.5f) * cw; val y0 = area.top + (j + 0.5f) * ch
+        // дуга: сначала вбок и вверх (дуновение), потом — в знак
+        val c1x = x0 + (h - 0.5f) * 2f * side; val c1y = y0 - lift * (0.5f + h)
+        val e = p * p * (1.6f - 0.6f * p)
+        val u = 1f - e
+        val x = u * u * x0 + 2f * u * e * c1x + e * e * end.x
+        val y = u * u * y0 + 2f * u * e * c1y + e * e * end.y
+        val appear = (t * 7f).coerceIn(0f, 1f)
+        val r = lerp(minOf(cw, ch) * 0.62f, tiny, (p * 1.8f).coerceIn(0f, 1f))
+        val a = appear * (1f - p * p * p)
+        if (a <= 0.01f) continue
+        drawCircle(Color(cols[j * n + i]), r, Offset(x, y), alpha = a)
     }
 }

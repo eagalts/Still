@@ -61,19 +61,9 @@ fun BottomLayer(s: Still, ctl: FeedController) {
     BackHandler(selecting) { s.selection = emptySet() }
     BackHandler(!selecting && s.filter != null && s.viewing == null && !s.sheet) { s.open(null) }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        // без дымки и плашки: фото идут до самого низа, знак и действия висят на них стеклом
         Column(
-            Modifier.fillMaxWidth().drawBehind {
-                // дымка: лента уходит под знак, а не обрезается плашкой; окрашена светом кадров на экране
-                val fade = 36.dp.toPx()
-                val h = tint(p.page, ambient)
-                drawRect(
-                    Brush.verticalGradient(
-                        0f to h.copy(alpha = 0f), 0.35f to h.copy(alpha = 0.55f), 1f to h.copy(alpha = 0.96f),
-                        startY = -fade, endY = size.height,
-                    ),
-                    topLeft = Offset(0f, -fade), size = Size(size.width, size.height + fade),
-                )
-            }.navigationBarsPadding(),
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val similar = remember(s.selection, s.all) { if (s.selection.isEmpty()) emptyList() else s.similarToSelection() }
@@ -84,7 +74,7 @@ fun BottomLayer(s: Still, ctl: FeedController) {
             ) {
                 Row(
                     Modifier.padding(bottom = 8.dp).testTag("similar").bouncy(0.92f) { s.selectSimilar() }
-                        .clip(RoundedCornerShape(50)).background(p.sheet).padding(start = 12.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+                        .glass(RoundedCornerShape(50), p, ctl.ambient).padding(start = 12.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Similar, null, tint = p.accent, modifier = Modifier.size(18.dp))
@@ -101,19 +91,20 @@ fun BottomLayer(s: Still, ctl: FeedController) {
                 contentAlignment = Alignment.Center,
                 label = "bottom",
             ) { sel ->
-                Box(Modifier.fillMaxWidth().height(72.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
                     if (!sel) {
                         val unit = with(androidx.compose.ui.platform.LocalDensity.current) { 40.dp.toPx() }
                         val gulps = remember { androidx.compose.runtime.mutableIntStateOf(0) }
                         androidx.compose.runtime.LaunchedEffect(s.leaving) { if (s.leaving.isNotEmpty()) gulps.intValue++ }
                         StillMark(
+                            modifier = Modifier.glass(androidx.compose.foundation.shape.CircleShape, p, ctl.ambient),
                             onClick = { s.sheet = true },
                             energy = { kotlin.math.abs(ctl.velocity) / unit },
                             phase = { ctl.phase / unit },
                             gulp = gulps.intValue,
                         )
                     }
-                    else SelectionBar(s)
+                    else SelectionBar(s, ctl)
                 }
             }
         }
@@ -121,13 +112,13 @@ fun BottomLayer(s: Still, ctl: FeedController) {
 }
 
 @Composable
-private fun SelectionBar(s: Still) {
+private fun SelectionBar(s: Still, ctl: FeedController) {
     val p = LocalPalette.current
     val trash = s.filter == Filter.Trash
     val items = remember(s.selection) { s.selected() }
     val temporary = remember(items) { items.any { Ephemeral.daysLeft(it, System.currentTimeMillis(), s.index.keptIds()) != null } }
     Row(
-        Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(50)).background(p.sheet)
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().glass(RoundedCornerShape(50), p, ctl.ambient)
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,

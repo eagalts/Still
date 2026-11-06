@@ -113,12 +113,15 @@ fun StillMark(
     LaunchedEffect(gulp) {
         if (gulp == 0) return@LaunchedEffect
         // пиксели долетают к концу распада — тогда знак и сглатывает
-        kotlinx.coroutines.delay(430)
+        kotlinx.coroutines.delay(560)
         swallow.animateTo(1.22f, spring(0.9f, 1600f))
         swallow.animateTo(1f, spring(0.35f, 380f))
     }
     Box(
-        modifier.size(64.dp).testTag("still-mark")
+        // диск со знаком проседает при нажатии и «сглатывает» целиком, вместе со стеклом
+        Modifier.graphicsLayer {
+            val k = (press * swallow.value).coerceAtLeast(0f); scaleX = k; scaleY = k
+        }.then(modifier).size(56.dp).testTag("still-mark")
             .semantics { contentDescription = t("Поиск и альбомы") }
             .clickable(src, indication = null) {
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
@@ -128,10 +131,7 @@ fun StillMark(
         contentAlignment = Alignment.Center,
     ) {
         Canvas(
-            Modifier.size(40.dp).graphicsLayer {
-                val k = (press * swallow.value).coerceAtLeast(0f); scaleX = k; scaleY = k
-                transformOrigin = TransformOrigin(0.5f, 0.7f)
-            }
+            Modifier.size(38.dp)
         ) {
             val e = energy().coerceIn(0f, 1f)
             drawStillMark(size.width, ripple.value + e * 0.9f, lift.value, phase())

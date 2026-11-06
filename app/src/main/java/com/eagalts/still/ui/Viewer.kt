@@ -216,6 +216,16 @@ fun Viewer(s: Still, ctl: FeedController) {
     }
 }
 
+private val GlowFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+    androidx.compose.ui.graphics.ColorMatrix().apply {
+        setToSaturation(1.55f)
+        // яркость ×0.82: свечение — фон, кадр поверх него должен быть ярче
+        timesAssign(androidx.compose.ui.graphics.ColorMatrix(floatArrayOf(
+            0.82f, 0f, 0f, 0f, 0f, 0f, 0.82f, 0f, 0f, 0f, 0f, 0f, 0.82f, 0f, 0f, 0f, 0f, 0f, 1f, 0f,
+        )))
+    }
+)
+
 /**
  * Свечение кадра: миниатюра, сжатая до 12×12 и растянутая на весь экран со сглаживанием, — мягкое облако
  * его цветов, почти бесплатно и на любом Android. Сверху — затемнение, чтобы кадр читался. Листаешь —
@@ -246,9 +256,17 @@ private fun Glow(s: Still, item: MediaItem, modifier: Modifier) {
                 drawImage(
                     g, dstOffset = androidx.compose.ui.unit.IntOffset(-pad.toInt(), -pad.toInt()),
                     dstSize = androidx.compose.ui.unit.IntSize((size.width + 2 * pad).toInt(), (size.height + 2 * pad).toInt()),
-                    filterQuality = androidx.compose.ui.graphics.FilterQuality.High, alpha = 0.9f,
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+                    // насыщеннее и чуть темнее исходника: облако чистого цвета, а не серо-болотная муть
+                    colorFilter = GlowFilter,
                 )
-                drawRect(Color.Black.copy(alpha = 0.42f))
+                // затемнение только к краям, где подписи и кнопки; середина остаётся цветной
+                drawRect(
+                    androidx.compose.ui.graphics.Brush.radialGradient(
+                        listOf(Color.Black.copy(alpha = 0.08f), Color.Black.copy(alpha = 0.5f)),
+                        center = center, radius = size.maxDimension * 0.62f,
+                    )
+                )
             }
         }
     }

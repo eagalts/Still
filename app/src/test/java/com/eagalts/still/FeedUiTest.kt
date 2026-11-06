@@ -36,12 +36,64 @@ class FakeLibrary(val items: List<MediaItem>) : Library {
     val gone = HashSet<Long>()
     override fun load(trashed: Boolean) = if (trashed) emptyList() else items.filter { it.id !in gone }
     override fun uri(it: MediaItem): Uri = Uri.parse("content://fake/${it.id}")
+    /** Кадр «как фото»: пейзаж, закат над водой, вечерний город или портрет — свет, планы, силуэты. */
     private fun paint(it: MediaItem, w: Int, h: Int): Bitmap {
         val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val hue = ((it.id * 47) % 360).toFloat()
-        val c1 = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.55f, 0.9f))
-        val c2 = android.graphics.Color.HSVToColor(floatArrayOf((hue + 40) % 360, 0.7f, 0.55f))
-        Canvas(b).drawRect(0f, 0f, w.toFloat(), h.toFloat(), Paint().apply { shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), c1, c2, Shader.TileMode.CLAMP) })
+        val c = Canvas(b)
+        val W = w.toFloat(); val H = h.toFloat()
+        val rnd = java.util.Random(it.id * 7919)
+        fun hsv(hh: Float, ss: Float, vv: Float) = android.graphics.Color.HSVToColor(floatArrayOf(((hh % 360) + 360) % 360, ss, vv))
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        fun sky(top: Int, bottom: Int) { p.shader = LinearGradient(0f, 0f, 0f, H, top, bottom, Shader.TileMode.CLAMP); c.drawRect(0f, 0f, W, H, p); p.shader = null }
+        fun hills(y: Float, amp: Float, col: Int, k: Float) {
+            val path = android.graphics.Path(); path.moveTo(0f, H)
+            var x = 0f; val ph = rnd.nextFloat() * 6f
+            while (x <= W) { path.lineTo(x, y + amp * kotlin.math.sin(x / W * k + ph).toFloat() + amp * 0.3f * kotlin.math.sin(x / W * k * 3.1f).toFloat()); x += W / 40f }
+            path.lineTo(W, H); path.close(); p.color = col; c.drawPath(path, p)
+        }
+        val hue = rnd.nextFloat() * 360f
+        when ((it.id % 4).toInt()) {
+            0 -> { // горы днём
+                sky(hsv(205f + hue * 0.05f, 0.55f, 0.95f), hsv(195f, 0.18f, 1f))
+                p.color = hsv(50f, 0.15f, 1f); c.drawCircle(W * (0.2f + rnd.nextFloat() * 0.6f), H * 0.2f, W * 0.07f, p)
+                hills(H * 0.5f, H * 0.08f, hsv(220f, 0.25f, 0.62f), 5f)
+                hills(H * 0.62f, H * 0.06f, hsv(150f + hue * 0.1f, 0.45f, 0.45f), 4f)
+                hills(H * 0.78f, H * 0.05f, hsv(110f + hue * 0.1f, 0.6f, 0.32f), 3f)
+            }
+            1 -> { // закат над водой
+                val warm = 10f + hue * 0.08f
+                sky(hsv(260f, 0.45f, 0.45f), hsv(warm + 20f, 0.75f, 1f))
+                p.shader = android.graphics.RadialGradient(W * 0.5f, H * 0.55f, W * 0.45f, intArrayOf(hsv(warm + 35f, 0.6f, 1f), 0x00FFFFFF), null, Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, W, H, p); p.shader = null
+                p.color = hsv(warm + 40f, 0.4f, 1f); c.drawCircle(W * 0.5f, H * 0.57f, W * 0.09f, p)
+                p.shader = LinearGradient(0f, H * 0.6f, 0f, H, hsv(warm + 10f, 0.7f, 0.7f), hsv(230f, 0.6f, 0.25f), Shader.TileMode.CLAMP)
+                c.drawRect(0f, H * 0.6f, W, H, p); p.shader = null
+                p.color = hsv(warm + 40f, 0.3f, 1f); p.alpha = 150
+                for (k in 0 until 7) c.drawRect(W * (0.42f + rnd.nextFloat() * 0.08f), H * (0.63f + k * 0.04f), W * (0.5f + rnd.nextFloat() * 0.08f), H * (0.635f + k * 0.04f), p)
+                p.alpha = 255
+            }
+            2 -> { // вечерний город
+                sky(hsv(230f, 0.6f, 0.3f), hsv(300f + hue * 0.1f, 0.4f, 0.75f))
+                var x = 0f
+                while (x < W) {
+                    val bw = W * (0.08f + rnd.nextFloat() * 0.1f); val bh = H * (0.25f + rnd.nextFloat() * 0.4f)
+                    p.color = hsv(240f, 0.3f, 0.12f + rnd.nextFloat() * 0.08f); c.drawRect(x, H - bh, x + bw, H, p)
+                    p.color = hsv(40f, 0.6f, 1f)
+                    var wy = H - bh + bw * 0.2f
+                    while (wy < H - 4) { var wx = x + bw * 0.15f; while (wx < x + bw * 0.8f) { if (rnd.nextFloat() < 0.45f) c.drawRect(wx, wy, wx + bw * 0.1f, wy + bw * 0.1f, p); wx += bw * 0.22f }; wy += bw * 0.25f }
+                    x += bw + 2f
+                }
+            }
+            else -> { // портрет: мягкий фон, силуэт головы и плеч
+                sky(hsv(hue, 0.25f, 0.85f), hsv(hue + 30f, 0.35f, 0.55f))
+                p.shader = android.graphics.RadialGradient(W * 0.3f, H * 0.25f, W * 0.5f, intArrayOf(0x66FFFFFF, 0x00FFFFFF), null, Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, W, H, p); p.shader = null
+                p.color = hsv(hue + 180f, 0.3f, 0.3f)
+                c.drawOval(W * 0.18f, H * 0.68f, W * 0.82f, H * 1.25f, p)
+                p.color = hsv(25f, 0.35f, 0.72f); c.drawOval(W * 0.36f, H * 0.3f, W * 0.64f, H * 0.66f, p)
+                p.color = hsv(25f, 0.5f, 0.25f); c.drawOval(W * 0.34f, H * 0.26f, W * 0.66f, H * 0.42f, p)
+            }
+        }
         return b
     }
     override fun thumbnail(it: MediaItem, px: Int, cancel: CancellationSignal) =
@@ -169,22 +221,30 @@ class FeedUiTest {
     }
 
     /**
-     * Физика: на быстрой прокрутке кадры сужаются поперёк движения — на стыке столбцов проступает фон.
-     * Остановилась — пружинят обратно, стык снова сплошной.
+     * Физика: на быстрой прокрутке кадры тянутся вдоль движения — картинка меняется, — но полотно не рвётся:
+     * ни на стыке столбцов, ни между рядами не проступает фон. Остановилась — всё как было.
      */
-    @Test fun fastScrollSquashesTiles() {
+    @Test fun fastScrollStretchesWithoutTearing() {
         show()
+        val calm0 = shot("physics-calm")
         rule.mainClock.autoAdvance = false
         rule.runOnIdle { ctl.velocity = 400f }
         rule.mainClock.advanceTimeByFrame(); rule.waitForIdle()
         val fast = shot("physics-fast", settle = false)
-        val y = fast.height / 2
         val tile = fast.width / 3
-        assertEquals("на скорости стык не разошёлся", android.graphics.Color.WHITE, fast.getPixel(tile, y))
+        val page = android.graphics.Color.WHITE
+        // стыки столбцов и рядов по всей высоте сетки, кроме самых краёв
+        var torn = 0; var changed = 0
+        for (y in fast.height / 8 until fast.height * 3 / 4 step 6) {
+            if (fast.getPixel(tile, y) == page || fast.getPixel(tile * 2, y) == page) torn++
+            if (fast.getPixel(tile / 2, y) != calm0.getPixel(tile / 2, y)) changed++
+        }
+        assertEquals("полотно порвалось", 0, torn)
+        assertTrue("на скорости ничего не тянется", changed > 20)
         rule.mainClock.autoAdvance = true
         rule.runOnIdle { ctl.velocity = 0f }
-        val calm = shot("physics-calm")
-        assertTrue(calm.getPixel(tile, y) != android.graphics.Color.WHITE)
+        val calm = shot("physics-calm2")
+        assertEquals(calm0.getPixel(tile / 2, fast.height / 2), calm.getPixel(tile / 2, fast.height / 2))
     }
 
     /** Удалённое рассыпается и стекает к знаку, а потом исчезает из ленты. */
