@@ -33,7 +33,8 @@ import java.io.File
 
 /** Подделка MediaStore: кадры — цветные градиенты, у каждого свой оттенок. */
 class FakeLibrary(val items: List<MediaItem>) : Library {
-    override fun load(trashed: Boolean) = if (trashed) emptyList() else items
+    val gone = HashSet<Long>()
+    override fun load(trashed: Boolean) = if (trashed) emptyList() else items.filter { it.id !in gone }
     override fun uri(it: MediaItem): Uri = Uri.parse("content://fake/${it.id}")
     private fun paint(it: MediaItem, w: Int, h: Int): Bitmap {
         val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -88,14 +89,17 @@ class FeedUiTest {
         while (!cond()) {
             check(System.currentTimeMillis() < end) { "не дождались" }
             rule.mainClock.advanceTimeBy(16)
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            // и часы главного потока: задержки корутин на нём (распад перед перечиткой) идут по ним
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(16))
             Thread.sleep(2)
         }
         rule.waitForIdle()
     }
 
+    private val ctl = com.eagalts.still.ui.FeedController(androidx.compose.foundation.lazy.grid.LazyGridState())
+
     private fun show(dark: Boolean = false) {
-        rule.setContent { StillApp(still, dark, onAsk = {}) }
+        rule.setContent { StillApp(still, dark, onAsk = {}, feedController = ctl) }
         rule.runOnIdle { still.reload(force = true) }
         until { still.feed.cells.isNotEmpty() }
         // миниатюры декодируются в фоне
@@ -103,8 +107,8 @@ class FeedUiTest {
         rule.waitForIdle()
     }
 
-    private fun shot(name: String) {
-        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+    private fun shot(name: String, settle: Boolean = true): Bitmap {
+        if (settle) { rule.mainClock.advanceTimeBy(1500); rule.waitForIdle() }
         // окно рисуется в картинку (captureToImage в Robolectric ждёт кадра вечно) — как в тестах Plume
         val v = rule.activity.window.decorView
         val b = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888)
@@ -112,6 +116,7 @@ class FeedUiTest {
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
         val dir = File("build/shots").apply { mkdirs() }
         File(dir, "$name.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        return b
     }
 
     @Test fun feedHasCameraAndFreshNoiseButNotOld() {
@@ -151,6 +156,56 @@ class FeedUiTest {
         val years = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
         assertTrue(years.isNotEmpty() && years.all { Regex("\\d{4}").matches(it) })
         shot("zoom-years")
+    }
+
+    /** Мозаика: между соседними кадрами нет зазора — на стыке столбцов пиксель кадра, а не фона. */
+    @Test fun mosaicHasNoGaps() {
+        show()
+        val b = shot("mosaic")
+        val tile = b.width / 3
+        val y = b.height / 2
+        val seam = b.getPixel(tile, y)
+        assertTrue("на стыке фон, а не кадр", seam != android.graphics.Color.WHITE)
+    }
+
+    /**
+     * Физика: на быстрой прокрутке кадры сужаются поперёк движения — на стыке столбцов проступает фон.
+     * Остановилась — пружинят обратно, стык снова сплошной.
+     */
+    @Test fun fastScrollSquashesTiles() {
+        show()
+        rule.mainClock.autoAdvance = false
+        rule.runOnIdle { ctl.velocity = 400f }
+        rule.mainClock.advanceTimeByFrame(); rule.waitForIdle()
+        val fast = shot("physics-fast", settle = false)
+        val y = fast.height / 2
+        val tile = fast.width / 3
+        assertEquals("на скорости стык не разошёлся", android.graphics.Color.WHITE, fast.getPixel(tile, y))
+        rule.mainClock.autoAdvance = true
+        rule.runOnIdle { ctl.velocity = 0f }
+        val calm = shot("physics-calm")
+        assertTrue(calm.getPixel(tile, y) != android.graphics.Color.WHITE)
+    }
+
+    /** Удалённое рассыпается и стекает к знаку, а потом исчезает из ленты. */
+    @Test fun deletedTilesDissolveIntoMark() {
+        show()
+        val r = rule.onNodeWithTag("tile-300").fetchSemanticsNode().boundsInRoot
+        val before = shot("dissolve-before")
+        rule.mainClock.autoAdvance = false
+        rule.runOnIdle { still.removed(setOf(300L)) }
+        // кадры по 16 мс: и часы Compose, и главный поток (отрисовка View идёт по его кадрам)
+        repeat(20) {
+            rule.mainClock.advanceTimeBy(16)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(16, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+        val mid = shot("dissolve-mid", settle = false)
+        // низ кадра уже стёк: там, где был кадр, теперь фон или чужие пиксели
+        val x = r.center.x.toInt(); val y = (r.bottom - r.height * 0.1f).toInt()
+        assertTrue("кадр не рассыпается", before.getPixel(x, y) != mid.getPixel(x, y))
+        rule.runOnIdle { (still.lib as FakeLibrary).gone += 300L }
+        rule.mainClock.autoAdvance = true
+        until { still.feed.cells.none { it.key == 300L } && still.leaving.isEmpty() }
     }
 
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }

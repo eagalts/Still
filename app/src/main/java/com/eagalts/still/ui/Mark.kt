@@ -41,9 +41,9 @@ import kotlin.math.sin
  * а точка поднялась над ней солнцем: «тихий кадр». Стиль тот же — стикер: тень, белая окантовка, градиент.
  *
  * [ripple] — рябь по глади (знак со знаком: пружина проходит через ноль — волна переворачивается, как настоящая);
- * [lift] — насколько точка подпрыгнула (доля размера).
+ * [lift] — насколько точка подпрыгнула (доля размера); [phase] — сдвиг волны (бежит вместе с лентой).
  */
-fun DrawScope.drawStillMark(s: Float, ripple: Float = 0f, lift: Float = 0f) {
+fun DrawScope.drawStillMark(s: Float, ripple: Float = 0f, lift: Float = 0f, phase: Float = 0f) {
     val y0 = s * 0.67f
     val x0 = s * 0.15f; val x1 = s * 0.85f
     val line = Path().apply {
@@ -51,7 +51,7 @@ fun DrawScope.drawStillMark(s: Float, ripple: Float = 0f, lift: Float = 0f) {
         for (i in 0..n) {
             val f = i / n.toFloat()
             // огибающая sin(πf): концы на месте, рябь — в середине
-            val y = y0 + ripple * s * 0.075f * sin(f * 3f * PI.toFloat()) * sin(f * PI.toFloat())
+            val y = y0 + ripple * s * 0.075f * sin(f * 3f * PI.toFloat() + phase) * sin(f * PI.toFloat())
             val x = x0 + (x1 - x0) * f
             if (i == 0) moveTo(x, y) else lineTo(x, y)
         }
@@ -80,7 +80,15 @@ fun DrawScope.drawStillMark(s: Float, ripple: Float = 0f, lift: Float = 0f) {
  * солнце подпрыгивает и садится. Гладь успокаивается сама — к моменту, когда шторка доехала.
  */
 @Composable
-fun StillMark(onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun StillMark(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Рябь от прокрутки ленты, 0…1 (читается при отрисовке — без рекомпозиций). */
+    energy: () -> Float = { 0f },
+    phase: () -> Float = { 0f },
+    /** Растёт, когда в знак стекают пиксели удалённых кадров: знак «глотает». */
+    gulp: Int = 0,
+) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val view = LocalView.current
@@ -101,6 +109,14 @@ fun StillMark(onClick: () -> Unit, modifier: Modifier = Modifier) {
         lift.animateTo(0.07f, spring(0.9f, 1800f))
         lift.animateTo(0f, spring(0.38f, 420f))
     }
+    val swallow = remember { Animatable(1f) }
+    LaunchedEffect(gulp) {
+        if (gulp == 0) return@LaunchedEffect
+        // пиксели долетают к концу распада — тогда знак и сглатывает
+        kotlinx.coroutines.delay(430)
+        swallow.animateTo(1.22f, spring(0.9f, 1600f))
+        swallow.animateTo(1f, spring(0.35f, 380f))
+    }
     Box(
         modifier.size(64.dp).testTag("still-mark")
             .semantics { contentDescription = t("Поиск и альбомы") }
@@ -113,9 +129,12 @@ fun StillMark(onClick: () -> Unit, modifier: Modifier = Modifier) {
     ) {
         Canvas(
             Modifier.size(40.dp).graphicsLayer {
-                val k = press.coerceAtLeast(0f); scaleX = k; scaleY = k
+                val k = (press * swallow.value).coerceAtLeast(0f); scaleX = k; scaleY = k
                 transformOrigin = TransformOrigin(0.5f, 0.7f)
             }
-        ) { drawStillMark(size.width, ripple.value, lift.value) }
+        ) {
+            val e = energy().coerceIn(0f, 1f)
+            drawStillMark(size.width, ripple.value + e * 0.9f, lift.value, phase())
+        }
     }
 }

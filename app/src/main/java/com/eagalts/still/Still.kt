@@ -289,15 +289,24 @@ class Still(
         if (items.isEmpty() || ctx == null) return
         val ids = items.map { it.id }.toSet()
         val sender = Actions.trashRequest(ctx, items.map(lib::uri), !restore) ?: run { toast(t("Android не дал убрать")); return }
+        request = SystemRequest(sender) { ok -> if (ok) removed(ids, restore) }
+    }
+
+    /**
+     * Система согласилась: кадры рассыпаются и стекают в знак (≈0.7 с), и только потом лента перечитывается —
+     * иначе плитки исчезли бы раньше, чем доиграл распад.
+     */
+    internal fun removed(ids: Set<Long>, restore: Boolean = false) {
+        selection = emptySet()
+        viewing = null
+        toast(if (restore) t("Возвращено: {0}", ids.size) else t("В корзине: {0} · 30 дней", ids.size))
+        if (restore) { reload(force = true); return }
         leaving = ids
-        request = SystemRequest(sender) { ok ->
+        scope.launch {
+            kotlinx.coroutines.delay(760)
+            reload(force = true)
+            reloadJob?.join()
             leaving = emptySet()
-            if (ok) {
-                selection = emptySet()
-                if (viewing != null) viewing = null
-                toast(if (restore) t("Возвращено: {0}", ids.size) else t("В корзине: {0} · 30 дней", ids.size))
-                reload(force = true)
-            }
         }
     }
 

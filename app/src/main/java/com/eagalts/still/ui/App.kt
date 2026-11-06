@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,7 +53,7 @@ import com.eagalts.still.t
 
 /** Корень: единственный экран — лента; всё остальное поверх неё. */
 @Composable
-fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit) {
+fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedController? = null) {
     val p = if (dark) DarkPalette else LightPalette
     CompositionLocalProvider(LocalPalette provides p) {
         Box(Modifier.fillMaxSize().background(p.page)) {
@@ -62,15 +63,25 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit) {
                 label = "access",
             ) { none ->
                 if (none) Welcome(onAsk) else {
-                    val ctl = remember { FeedController(androidx.compose.foundation.lazy.grid.LazyGridState()) }
+                    val ctl = feedController ?: remember { FeedController(androidx.compose.foundation.lazy.grid.LazyGridState()) }
                     LaunchedEffect(s.reveal, s.feed.gen) {
                         val id = s.reveal ?: return@LaunchedEffect
                         if (ctl.cells.any { it.key == id }) { ctl.reveal(id); s.reveal = null }
                     }
                     Box(Modifier.fillMaxSize()) {
-                        FeedScreen(s, ctl)
-                        BottomLayer(s)
-                        MarkSheet(s)
+                        // под шторкой лента уходит в размытие — шторка становится стеклом над твоими фото
+                        val blur by androidx.compose.animation.core.animateFloatAsState(
+                            if (s.sheet) 1f else 0f, fineSpring(1f, 300f), label = "blur",
+                        )
+                        Box(Modifier.fillMaxSize().graphicsLayer {
+                            val r = 28.dp.toPx() * blur.coerceIn(0f, 1f)
+                            if (android.os.Build.VERSION.SDK_INT >= 31 && r > 0.5f)
+                                renderEffect = androidx.compose.ui.graphics.BlurEffect(r, r, androidx.compose.ui.graphics.TileMode.Clamp)
+                        }) {
+                            FeedScreen(s, ctl)
+                            BottomLayer(s, ctl)
+                        }
+                        MarkSheet(s, ctl)
                         Viewer(s, ctl)
                     }
                 }

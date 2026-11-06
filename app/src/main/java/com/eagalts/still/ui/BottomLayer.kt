@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,19 +54,21 @@ import com.eagalts.still.t
  * действия поднимаются пружиной). Над действиями, если выбран «шум», — «Ещё N таких».
  */
 @Composable
-fun BottomLayer(s: Still) {
+fun BottomLayer(s: Still, ctl: FeedController) {
     val p = LocalPalette.current
     val selecting = s.selection.isNotEmpty()
+    val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
     BackHandler(selecting) { s.selection = emptySet() }
     BackHandler(!selecting && s.filter != null && s.viewing == null && !s.sheet) { s.open(null) }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(
             Modifier.fillMaxWidth().drawBehind {
-                // дымка: лента уходит под знак, а не обрезается плашкой
+                // дымка: лента уходит под знак, а не обрезается плашкой; окрашена светом кадров на экране
                 val fade = 36.dp.toPx()
+                val h = tint(p.page, ambient)
                 drawRect(
                     Brush.verticalGradient(
-                        0f to p.page.copy(alpha = 0f), 0.35f to p.page.copy(alpha = 0.55f), 1f to p.page.copy(alpha = 0.96f),
+                        0f to h.copy(alpha = 0f), 0.35f to h.copy(alpha = 0.55f), 1f to h.copy(alpha = 0.96f),
                         startY = -fade, endY = size.height,
                     ),
                     topLeft = Offset(0f, -fade), size = Size(size.width, size.height + fade),
@@ -99,7 +102,17 @@ fun BottomLayer(s: Still) {
                 label = "bottom",
             ) { sel ->
                 Box(Modifier.fillMaxWidth().height(72.dp), contentAlignment = Alignment.Center) {
-                    if (!sel) StillMark(onClick = { s.sheet = true })
+                    if (!sel) {
+                        val unit = with(androidx.compose.ui.platform.LocalDensity.current) { 40.dp.toPx() }
+                        val gulps = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+                        androidx.compose.runtime.LaunchedEffect(s.leaving) { if (s.leaving.isNotEmpty()) gulps.intValue++ }
+                        StillMark(
+                            onClick = { s.sheet = true },
+                            energy = { kotlin.math.abs(ctl.velocity) / unit },
+                            phase = { ctl.phase / unit },
+                            gulp = gulps.intValue,
+                        )
+                    }
                     else SelectionBar(s)
                 }
             }

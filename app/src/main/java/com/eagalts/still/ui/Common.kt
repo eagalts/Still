@@ -88,7 +88,7 @@ fun Modifier.bouncy(
 
 /** Шторка снизу: выезд пружиной, затемнение, закрытие смахиванием вниз (тянется за пальцем, вверх — с сопротивлением). */
 @Composable
-fun Sheet(visible: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+fun Sheet(visible: Boolean, onDismiss: () -> Unit, color: Color? = null, content: @Composable ColumnScope.() -> Unit) {
     val p = LocalPalette.current
     AnimatedVisibility(visible, enter = fadeIn(tween(220)), exit = fadeOut(tween(200))) {
         Box(
@@ -111,7 +111,7 @@ fun Sheet(visible: Boolean, onDismiss: () -> Unit, content: @Composable ColumnSc
                     .widthIn(max = 560.dp)
                     .fillMaxWidth()
                     .clip(SquircleShape(Radius.xl, Radius.xl, 0.dp, 0.dp))
-                    .background(p.sheet)
+                    .background(color ?: p.sheet)
                     .pointerInput(Unit) {
                         detectVerticalDragGestures(
                             onDragEnd = {

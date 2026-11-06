@@ -69,6 +69,10 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -95,9 +99,17 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Зазор между плитками и скругление — от размера плитки: мелкая сетка плотнее и острее. */
-fun gapFor(cols: Int): Dp = when { cols <= 5 -> 2.dp; cols <= 8 -> 1.5.dp; else -> 1.dp }
-fun radiusFor(cols: Int): Dp = when (cols) { 2 -> 12.dp; 3 -> 8.dp; 5 -> 6.dp; 8 -> 4.dp; else -> 2.dp }
+/**
+ * Мозаика: кадры стыкуются без зазоров и без скруглений — одно сплошное полотно из твоих фото.
+ * Скругление появляется только у кадра, который «взяли» (выбор, полёт в просмотр).
+ */
+fun gapFor(@Suppress("UNUSED_PARAMETER") cols: Int): Dp = 0.dp
+fun radiusFor(@Suppress("UNUSED_PARAMETER") cols: Int): Dp = 0.dp
+/** Скругление взятого кадра. */
+val LiftRadius = 10.dp
+
+/** Положение плитки в сетке — пишется на раскладке, читается в отрисовке (без рекомпозиций). */
+class Spot { var x = 0f; var y = 0f; var w = 0f; var h = 0f }
 
 /**
  * Связь ленты с просмотром: где на экране плитка кадра (откуда фото вылетает и куда возвращается)
@@ -114,6 +126,19 @@ class FeedController(val grid: LazyGridState) {
     var placed = false
     var shownFilter: Filter? = null
     var atEnd = true
+
+    // ——— физика ———
+    /** Скорость прокрутки, px за кадр (сглаженная, со знаком): от неё плитки тянутся, а ряды расходятся. */
+    var velocity by androidx.compose.runtime.mutableFloatStateOf(0f)
+    /** Сколько проехала лента всего — фаза ряби на глади знака: волна бежит вместе с лентой. */
+    var phase by androidx.compose.runtime.mutableFloatStateOf(0f)
+    /** Цвет того, что сейчас на экране: им подсвечены дымка, шторка и строка состояния. */
+    var ambient by mutableStateOf<Color?>(null)
+
+    fun push(dy: Float) {
+        velocity = velocity * 0.55f + dy * 0.45f
+        phase += dy
+    }
 
     private fun info(id: Long): LazyGridItemInfo? = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
 
@@ -162,12 +187,31 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val capsule by animateFloatAsState(if (s.filter != null) 1f else 0f, fineSpring(0.86f, 420f), label = "capsule")
+    val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
 
     // щипок: сетка тянется за пальцами, а на смене ступени новая раскладка подхватывает масштаб и доезжает до 1
     val zoom = remember { Animatable(1f) }
     var pivot by remember { mutableStateOf(Offset.Zero) }
     var anchor by remember { mutableStateOf<Pair<Long, Float>?>(null) }   // кадр под пальцами и его доля по высоте
     var pendingScale by remember { mutableStateOf<Float?>(null) }
+    // остановилась — плитки пружинят обратно, с небольшим перелётом (желе), и считается цвет экрана
+    LaunchedEffect(Unit) {
+        snapshotFlow { ctl.grid.isScrollInProgress }.collect { moving ->
+            if (!moving) {
+                ctl.ambient = ambientOf(s, ctl)
+                androidx.compose.animation.core.animate(ctl.velocity, 0f, animationSpec = spring(0.32f, 240f)) { v, _ -> ctl.velocity = v }
+            }
+        }
+    }
+    LaunchedEffect(feed.gen) { ctl.ambient = ambientOf(s, ctl) }
+    val physics = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
+                ctl.push(consumed.y)
+                return Offset.Zero
+            }
+        }
+    }
     // лента открывается в конце — на самом свежем; если были в конце, новый кадр не уводит вверх
     LaunchedEffect(Unit) { snapshotFlow { ctl.grid.canScrollForward }.collect { ctl.atEnd = !it } }
     LaunchedEffect(feed.gen) {
@@ -321,7 +365,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(feed.cols),
             state = ctl.grid,
-            modifier = Modifier.fillMaxSize().graphicsLayer {
+            modifier = Modifier.fillMaxSize().nestedScroll(physics).graphicsLayer {
                 val k = zoom.value.coerceIn(0.4f, 2.5f)
                 scaleX = k; scaleY = k
                 transformOrigin = TransformOrigin(
@@ -363,7 +407,10 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         // дымка под строкой состояния: время и батарея читаются поверх любого кадра
         Box(
             Modifier.fillMaxWidth().height(top + 12.dp)
-                .background(Brush.verticalGradient(listOf(p.page.copy(alpha = 0.92f), p.page.copy(alpha = 0f))))
+                .drawBehind {
+                    val c = tint(p.page, ambient)
+                    drawRect(Brush.verticalGradient(listOf(c.copy(alpha = 0.9f), c.copy(alpha = 0f))))
+                }
         )
         FilterCapsule(s, top, capsule)
         FastScroll(s, ctl, top, bottom)
@@ -404,7 +451,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     val radius = radiusFor(cols)
 
     val pick by animateFloatAsState(if (selected) 1f else 0f, fineSpring(0.62f, 700f), label = "pick")
-    val gone by animateFloatAsState(if (leaving) 1f else 0f, fineSpring(0.9f, 500f), label = "gone")
+    val gone by animateFloatAsState(if (leaving) 1f else 0f, if (leaving) tween(720, easing = androidx.compose.animation.core.LinearEasing) else tween(0), label = "gone")
 
     // кадры раскрытой стопки разлетаются из обложки по очереди и складываются обратно
     val fan = remember(c.entry.key, item.id) { Animatable(if (c.inStack && ctl.fanKey == c.entry.key) 0f else 1f) }
@@ -427,35 +474,52 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         }
     }
 
+    val spot = remember { Spot() }
+    val unit = with(density) { 56.dp.toPx() }
+    val spread = with(density) { 26.dp.toPx() }
     BoxWithConstraints(
-        modifier.aspectRatio(1f).testTag("tile-${item.id}")
+        modifier.zIndex(if (leaving) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
+            .onPlaced { val o = it.positionInParent(); spot.x = o.x; spot.y = o.y; spot.w = it.size.width.toFloat(); spot.h = it.size.height.toFloat() }
             .graphicsLayer {
                 val f = fan.value
-                translationX = fanFrom.x * (1f - f); translationY = fanFrom.y * (1f - f)
-                val k = lerp(1f, 0.86f, pick) * lerp(0.82f, 1f, f) * lerp(1f, 0.55f, gone)
-                scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
-                alpha = when {
-                    hidden -> 0f
-                    else -> (f.coerceIn(0f, 1f) * (1f - gone)).coerceIn(0f, 1f)
-                }
+                // физика: быстрая прокрутка тянет кадр вдоль движения и сужает поперёк (объём сохраняется),
+                // а ряды расходятся от центра экрана — дальние отстают, как в желе
+                val v = (ctl.velocity / unit).coerceIn(-1f, 1f)
+                val av = abs(v)
+                val vpH = ctl.grid.layoutInfo.viewportSize.height.toFloat().coerceAtLeast(1f)
+                val rel = ((spot.y + spot.h / 2f) / vpH - 0.5f).coerceIn(-0.6f, 0.6f)
+                translationX = fanFrom.x * (1f - f)
+                translationY = fanFrom.y * (1f - f) - v * rel * spread * 2f
+                rotationZ = (1f - f) * (if (order % 2 == 0) 7f else -7f)
+                val k = lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
+                scaleX = (k * (1f - 0.06f * av)).coerceAtLeast(0f)
+                scaleY = (k * (1f + 0.16f * av)).coerceAtLeast(0f)
+                alpha = if (hidden) 0f else f.coerceIn(0f, 1f)
             }
     ) {
         val px = with(density) { maxWidth.roundToPx() }
         val bmp = rememberThumb(s, item, px)
         val shown by animateFloatAsState(if (bmp.value != null) 1f else 0f, if (bmp.fresh) tween(140) else tween(0), label = "load")
-        val stackDepth = if (c.entry.stacked && !c.inStack) 1f else 0f
+        // в мозаике у стопки нет «листов» над обложкой (они рвали полотно щелью) — её выдаёт счётчик
+        val stackDepth = 0f
         Spacer(
             Modifier.fillMaxSize().drawBehind {
                 val inset = if (stackDepth > 0f) 3.dp.toPx() else 0f
-                val r = (radius.toPx() * lerp(1f, 1.6f, pick)).coerceAtLeast(0f)
+                val r = (radius.toPx() + LiftRadius.toPx() * pick).coerceAtLeast(0f)
                 if (inset > 0f) {
                     // края стопки: два листа под обложкой, видны над ней
                     drawSheet(Rect(inset * 2.2f, 0f, size.width - inset * 2.2f, size.height - inset * 2), r, p.muted.copy(alpha = 0.22f))
                     drawSheet(Rect(inset * 1.1f, inset * 0.55f, size.width - inset * 1.1f, size.height - inset), r, p.muted.copy(alpha = 0.38f))
                 }
                 val area = Rect(0f, inset * 1.1f, size.width, size.height)
-                drawSheet(area, r, p.tile)
+                if (gone <= 0f) drawSheet(area, r, p.tile)
                 val b = bmp.value
+                if (gone > 0f && b != null) {
+                    // удалённый кадр рассыпается на пиксели, и они стекают в знак
+                    val target = dissolveTarget(ctl, spot)
+                    drawDissolve(b, area, gone, target)
+                    return@drawBehind
+                }
                 if (b != null && shown > 0f) clipPath(androidx.compose.ui.graphics.Path().apply { addOutline(squircleOutline(area.left, area.top, area.right, area.bottom, r)) }) {
                     drawCover(b, area, shown)
                 }
@@ -687,3 +751,61 @@ private fun FastScroll(s: Still, ctl: FeedController, top: Dp, bottom: Dp) {
     }
 }
 
+
+
+/** Цвет экрана: средний «памятный» цвет кадров на виду (уже посчитан для поиска — здесь только сложение). */
+private fun ambientOf(s: Still, ctl: FeedController): Color? {
+    var r = 0f; var g = 0f; var b = 0f; var n = 0
+    for (info in ctl.grid.layoutInfo.visibleItemsInfo) {
+        val id = info.key as? Long ?: continue
+        val c = s.index.color(id) ?: continue
+        r += android.graphics.Color.red(c); g += android.graphics.Color.green(c); b += android.graphics.Color.blue(c); n++
+    }
+    if (n == 0) return null
+    return Color(r / n / 255f, g / n / 255f, b / n / 255f)
+}
+
+/** Фон, чуть окрашенный светом кадров: на светлой теме — едва, на тёмной — заметнее (как отсвет). */
+fun tint(page: Color, light: Color?, amount: Float = 0.22f): Color =
+    if (light == null) page else androidx.compose.ui.graphics.lerp(page, light, if (page.luminance() < 0.5f) amount * 1.4f else amount)
+
+private fun Color.luminance() = 0.2126f * red + 0.7152f * green + 0.0722f * blue
+
+/** Куда стекают пиксели: к знаку внизу по центру, в координатах плитки. */
+private fun DrawScope.dissolveTarget(ctl: FeedController, spot: Spot): Offset {
+    val vp = ctl.grid.layoutInfo.viewportSize
+    val mark = Offset(vp.width / 2f, vp.height - 40.dp.toPx())
+    return mark - Offset(spot.x + spot.w / 2f, spot.y + spot.h / 2f)
+}
+
+/**
+ * Распад кадра: сетка блоков, каждый со своей задержкой (сначала ближние к знаку), падает с ускорением
+ * к знаку, уменьшаясь и тая. Рисуется кусками той же миниатюры — без копий и аллокаций битмапов.
+ */
+private fun DrawScope.drawDissolve(b: ImageBitmap, area: Rect, t: Float, target: Offset) {
+    val n = 9
+    val k = maxOf(area.width / b.width, area.height / b.height)
+    val sw = area.width / k; val sh = area.height / k
+    val sx = (b.width - sw) / 2f; val sy = (b.height - sh) / 2f
+    val bw = area.width / n; val bh = area.height / n
+    for (j in 0 until n) for (i in 0 until n) {
+        // нижние и центральные блоки уходят первыми
+        val d = ((n - 1 - j) + abs(i - n / 2) * 0.6f) / (n * 1.6f) * 0.45f
+        val p = ((t - d) / 0.55f).coerceIn(0f, 1f)
+        if (p >= 1f) continue
+        val e = p * p
+        val x0 = area.left + i * bw; val y0 = area.top + j * bh
+        val wob = kotlin.math.sin((i * 7 + j * 13).toFloat()) * 10.dp.toPx() * p * (1f - p)
+        val cx = x0 + bw / 2f + (target.x + area.width / 2f - (x0 + bw / 2f)) * e + wob
+        val cy = y0 + bh / 2f + (target.y + area.height / 2f - (y0 + bh / 2f)) * e
+        val sc = 1f - 0.75f * p
+        drawImage(
+            b,
+            srcOffset = IntOffset((sx + i * sw / n).roundToInt(), (sy + j * sh / n).roundToInt()),
+            srcSize = IntSize((sw / n).roundToInt().coerceAtLeast(1), (sh / n).roundToInt().coerceAtLeast(1)),
+            dstOffset = IntOffset((cx - bw * sc / 2f).roundToInt(), (cy - bh * sc / 2f).roundToInt()),
+            dstSize = IntSize((bw * sc).roundToInt().coerceAtLeast(1), (bh * sc).roundToInt().coerceAtLeast(1)),
+            alpha = (1f - p * p).coerceIn(0f, 1f),
+        )
+    }
+}

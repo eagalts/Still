@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -158,8 +159,9 @@ fun Viewer(s: Still, ctl: FeedController) {
         val h = box.height
         val pull = (drag.value.y / (h * 0.6f)).coerceIn(0f, 1f)
         val f = flight.value
-        // фон: чёрный под кадром; тянешь вниз — проступает лента
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = (f.coerceIn(0f, 1f) * (1f - pull * 1.15f)).coerceIn(0f, 1f) }.background(Color.Black))
+        // фон — не чёрный, а свечение самого кадра; тянешь вниз — проступает лента
+        val bgAlpha = (f.coerceIn(0f, 1f) * (1f - pull * 1.15f)).coerceIn(0f, 1f)
+        Glow(s, item, Modifier.fillMaxSize().graphicsLayer { alpha = bgAlpha })
 
         val inFlight = f < 0.999f || closing || dismissing
         val thumb = rememberLarge(s, item)
@@ -211,6 +213,44 @@ fun Viewer(s: Still, ctl: FeedController) {
 
         val ui by animateFloatAsState(if (chrome && !dismissing && !closing && f > 0.98f) 1f else 0f, tween(180), label = "chrome")
         if (ui > 0.001f) Chrome(s, item, v.fromFilter != null, ui, onShowInFeed = { s.showInFeed(item) })
+    }
+}
+
+/**
+ * Свечение кадра: миниатюра, сжатая до 12×12 и растянутая на весь экран со сглаживанием, — мягкое облако
+ * его цветов, почти бесплатно и на любом Android. Сверху — затемнение, чтобы кадр читался. Листаешь —
+ * свечение перетекает в цвета следующего кадра.
+ */
+@Composable
+private fun Glow(s: Still, item: MediaItem, modifier: Modifier) {
+    val thumb = rememberLarge(s, item)
+    val small by produceState<ImageBitmap?>(null, item.id, thumb) {
+        val t = thumb ?: return@produceState
+        value = withContext(Dispatchers.Default) {
+            runCatching {
+                val src = t.asAndroidBitmap().let { if (it.config == Bitmap.Config.HARDWARE) it.copy(Bitmap.Config.ARGB_8888, false) else it }
+                Bitmap.createScaledBitmap(src, 12, 12, true).asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    androidx.compose.animation.Crossfade(small, modifier, animationSpec = tween(420), label = "glow") { g ->
+        Canvas(Modifier.fillMaxSize().graphicsLayer {
+            // на Android 12+ облако ещё и размыто видеокартой — без следов растяжения
+            if (android.os.Build.VERSION.SDK_INT >= 31) renderEffect =
+                androidx.compose.ui.graphics.BlurEffect(48.dp.toPx(), 48.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+        }) {
+            drawRect(Color.Black)
+            if (g != null) {
+                // чуть крупнее экрана: края облака не видны
+                val pad = size.minDimension * 0.2f
+                drawImage(
+                    g, dstOffset = androidx.compose.ui.unit.IntOffset(-pad.toInt(), -pad.toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize((size.width + 2 * pad).toInt(), (size.height + 2 * pad).toInt()),
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.High, alpha = 0.9f,
+                )
+                drawRect(Color.Black.copy(alpha = 0.42f))
+            }
+        }
     }
 }
 

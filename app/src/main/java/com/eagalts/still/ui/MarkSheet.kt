@@ -53,8 +53,12 @@ import com.eagalts.still.t
  * отфильтровалась на месте, шторка уехала.
  */
 @Composable
-fun MarkSheet(s: Still) {
-    Sheet(s.sheet, onDismiss = { s.sheet = false }) {
+fun MarkSheet(s: Still, ctl: FeedController) {
+    val pal = LocalPalette.current
+    // стекло: лента под шторкой размыта (см. App), шторка полупрозрачна и окрашена светом кадров
+    val glass = android.os.Build.VERSION.SDK_INT >= 31
+    val sheetColor = tint(pal.sheet, ctl.ambient, 0.16f).copy(alpha = if (glass) 0.8f else 1f)
+    Sheet(s.sheet, onDismiss = { s.sheet = false }, color = sheetColor) {
         val p = LocalPalette.current
         var text by remember { mutableStateOf("") }
         val counts = remember(s.all) { s.counts() }
