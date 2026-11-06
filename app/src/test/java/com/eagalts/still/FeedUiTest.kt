@@ -124,6 +124,35 @@ class FeedUiTest {
         shot("feed-light")
     }
 
+    @Test fun opensAtNewestAtTheBottomWithoutDates() {
+        show()
+        val cells = still.feed.cells
+        assertTrue("в обычной ленте подписей нет", cells.none { it is Cell.Header })
+        // от старого к новому: последняя плитка — свежая серия
+        assertEquals(103L, (cells.last() as Cell.Tile).item.id)
+        val tiles = cells.filterIsInstance<Cell.Tile>().map { it.item.taken }
+        assertEquals(tiles.sorted(), tiles)
+        // и лента открылась на ней: плитка на экране, у нижнего края
+        val r = rule.onNodeWithTag("tile-103").fetchSemanticsNode().boundsInRoot
+        val h = rule.activity.window.decorView.height
+        assertTrue("свежее не внизу: ${r.bottom} из $h", r.bottom > h * 0.7f)
+        shot("feed-bottom")
+    }
+
+    @Test fun zoomOutShowsMonthsThenOnlyYears() {
+        show()
+        rule.runOnIdle { still.zoomTo(8) }
+        until { still.feed.cols == 8 }
+        val months = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
+        assertTrue(months.isNotEmpty() && months.all { Regex("\\d{4}").containsMatchIn(it) && it.any(Char::isLetter) })
+        shot("zoom-months")
+        rule.runOnIdle { still.zoomTo(13) }
+        until { still.feed.cols == 13 }
+        val years = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
+        assertTrue(years.isNotEmpty() && years.all { Regex("\\d{4}").matches(it) })
+        shot("zoom-years")
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

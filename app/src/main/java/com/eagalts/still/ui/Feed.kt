@@ -110,6 +110,10 @@ class FeedController(val grid: LazyGridState) {
     /** Стопка, которая только что раскрылась (её кадры разлетаются из обложки) или складывается обратно. */
     var fanKey by mutableLongStateOf(-1L)
     var folding by mutableLongStateOf(-1L)
+    /** Лента уже встала на место (в конец) и для какого фильтра; стоит ли она в самом конце сейчас. */
+    var placed = false
+    var shownFilter: Filter? = null
+    var atEnd = true
 
     private fun info(id: Long): LazyGridItemInfo? = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
 
@@ -164,7 +168,14 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     var pivot by remember { mutableStateOf(Offset.Zero) }
     var anchor by remember { mutableStateOf<Pair<Long, Float>?>(null) }   // кадр под пальцами и его доля по высоте
     var pendingScale by remember { mutableStateOf<Float?>(null) }
+    // лента открывается в конце — на самом свежем; если были в конце, новый кадр не уводит вверх
+    LaunchedEffect(Unit) { snapshotFlow { ctl.grid.canScrollForward }.collect { ctl.atEnd = !it } }
     LaunchedEffect(feed.gen) {
+        val fresh = ctl.shownFilter != s.filter || !ctl.placed
+        if (anchor == null && feed.cells.isNotEmpty() && (fresh || ctl.atEnd)) {
+            ctl.grid.requestScrollToItem(feed.cells.size - 1)
+            ctl.placed = true; ctl.shownFilter = s.filter
+        }
         anchor?.let { (key, frac) ->
             val idx = feed.cells.indexOfFirst { it.key == key }
             if (idx >= 0) {
@@ -372,7 +383,7 @@ private fun tap(s: Still, ctl: FeedController, index: Int) {
 private fun Header(label: String, level: Level) {
     val p = LocalPalette.current
     val (size, weight, padTop) = when (level) {
-        Level.DAYS -> Triple(15.sp, FontWeight.SemiBold, 18.dp)
+        Level.NONE -> Triple(15.sp, FontWeight.SemiBold, 18.dp)
         Level.MONTHS -> Triple(20.sp, FontWeight.Bold, 22.dp)
         Level.YEARS -> Triple(28.sp, FontWeight.Bold, 26.dp)
     }

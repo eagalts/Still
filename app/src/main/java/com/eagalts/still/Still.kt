@@ -49,11 +49,14 @@ sealed class Cell {
 
 class Feed(val cells: List<Cell>, val cols: Int, val gen: Int)
 
-/** Уровень времени по числу столбцов: крупно — дни, мельче — месяцы, совсем мелко — годы. */
-enum class Level { DAYS, MONTHS, YEARS }
+/**
+ * Подписи времени по числу столбцов (как в Фото Apple): обычная лента — сплошная, без подписей;
+ * отдалил до предела — месяцы с годом; ещё дальше — только годы.
+ */
+enum class Level { NONE, MONTHS, YEARS }
 
 val ColumnSteps = intArrayOf(2, 3, 5, 8, 13)
-fun levelOf(cols: Int) = when { cols <= 3 -> Level.DAYS; cols <= 8 -> Level.MONTHS; else -> Level.YEARS }
+fun levelOf(cols: Int) = when { cols <= 5 -> Level.NONE; cols <= 8 -> Level.MONTHS; else -> Level.YEARS }
 
 enum class Access { NONE, PARTIAL, FULL }
 
@@ -155,15 +158,17 @@ class Still(
             is Filter.Search -> items.filter { f.query.matches(it, index.color(it.id)) }
         }
         // стопки — в ленте и альбомах; в поиске и корзине каждый кадр сам по себе
-        val entries = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::hash)
+        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::hash)
         else base.map { Entry(it, listOf(it)) }
+        // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
+        val entries = newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }
         val level = levelOf(cols)
         val out = ArrayList<Cell>(entries.size + entries.size / 8)
         val cal = Calendar.getInstance()
         var lastPeriod = Long.MIN_VALUE
         for (e in entries) {
-            val p = period(cal, e.cover.taken, level)
-            if (p != lastPeriod) { out += Cell.Header("h$p", Dates.label(e.cover.taken, level, t)); lastPeriod = p }
+            val p = if (level == Level.NONE) 0L else period(cal, e.cover.taken, level)
+            if (level != Level.NONE && p != lastPeriod) { out += Cell.Header("h$p", Dates.label(e.cover.taken, level)); lastPeriod = p }
             out += Cell.Tile(e, e.cover, false)
             if (e.stacked && e.key in exp) e.members.forEach { m -> if (m !== e.cover) out += Cell.Tile(e, m, true) }
         }
@@ -174,7 +179,7 @@ class Still(
         cal.timeInMillis = ms
         val y = cal.get(Calendar.YEAR).toLong()
         return when (level) {
-            Level.DAYS -> y * 1000 + cal.get(Calendar.DAY_OF_YEAR)
+            Level.NONE -> 0
             Level.MONTHS -> y * 100 + cal.get(Calendar.MONTH)
             Level.YEARS -> y
         }

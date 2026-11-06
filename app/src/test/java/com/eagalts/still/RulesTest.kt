@@ -145,7 +145,7 @@ class DatesTest {
             for (l in listOf("ru") + I18n.languages) {
                 java.util.Locale.setDefault(java.util.Locale.forLanguageTag(l))
                 for (lv in Level.entries) for (d in listOf(0L, 3L, 400L)) {
-                    assertTrue(Dates.label(now - d * Ephemeral.DAY, lv, now).isNotBlank())
+                    if (lv != Level.NONE) assertTrue(Dates.label(now - d * Ephemeral.DAY, lv).isNotBlank())
                 }
                 assertTrue(Dates.scrub(now).isNotBlank() && Dates.moment(now).isNotBlank())
             }
