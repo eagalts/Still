@@ -14,13 +14,19 @@ object Dates {
         val c = Calendar.getInstance().apply { timeInMillis = ms }
         return when (level) {
             Level.YEARS -> c.get(Calendar.YEAR).toString()
-            Level.MONTHS -> fmt("LLLLy", ms).replaceFirstChar { it.titlecase(locale) }
+            Level.MONTHS -> monthYear(ms)
             Level.NONE -> ""
         }
     }
 
     /** Крупная подпись быстрой перемотки: «Ноябрь 2024». */
-    fun scrub(ms: Long): String = fmt("LLLLy", ms).replaceFirstChar { it.titlecase(locale) }
+    fun scrub(ms: Long): String = monthYear(ms)
+
+    /** «Апрель 2026» — без «г.», которое ICU добавляет в русском шаблоне месяца с годом. */
+    private fun monthYear(ms: Long): String {
+        val c = Calendar.getInstance().apply { timeInMillis = ms }
+        return fmt("LLLL", ms).replaceFirstChar { it.titlecase(locale) } + " " + c.get(Calendar.YEAR)
+    }
 
     /** Время в просмотре: «5 ноября 2024, 18:42». */
     fun moment(ms: Long): String = fmt("dMMMMyHHmm", ms)

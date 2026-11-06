@@ -101,10 +101,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Мозаика: кадры стыкуются без зазоров и без скруглений — одно сплошное полотно из твоих фото.
- * Скругление появляется только у кадра, который «взяли» (выбор, полёт в просмотр).
+ * Сетка как в Фото Apple: квадратные кадры без скруглений, разделённые тонкой линией фона. Чем мельче сетка,
+ * тем тоньше линия. Скругление появляется только у кадра, который «взяли» (выбор, полёт в просмотр).
  */
-fun gapFor(@Suppress("UNUSED_PARAMETER") cols: Int): Dp = 0.dp
+fun gapFor(cols: Int): Dp = when { cols <= 5 -> 1.5.dp; cols <= 8 -> 1.dp; else -> 0.5.dp }
 fun radiusFor(@Suppress("UNUSED_PARAMETER") cols: Int): Dp = 0.dp
 /** Скругление взятого кадра. */
 val LiftRadius = 10.dp

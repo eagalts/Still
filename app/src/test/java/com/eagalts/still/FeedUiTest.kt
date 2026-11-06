@@ -201,7 +201,7 @@ class FeedUiTest {
         rule.runOnIdle { still.zoomTo(8) }
         until { still.feed.cols == 8 }
         val months = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
-        assertTrue(months.isNotEmpty() && months.all { Regex("\\d{4}").containsMatchIn(it) && it.any(Char::isLetter) })
+        assertTrue(months.toString(), months.isNotEmpty() && months.all { Regex("^\\p{L}+ \\d{4}$").matches(it) })
         shot("zoom-months")
         rule.runOnIdle { still.zoomTo(13) }
         until { still.feed.cols == 13 }
@@ -210,14 +210,17 @@ class FeedUiTest {
         shot("zoom-years")
     }
 
-    /** Мозаика: между соседними кадрами нет зазора — на стыке столбцов пиксель кадра, а не фона. */
-    @Test fun mosaicHasNoGaps() {
+    /** Сетка как у Apple: между кадрами тонкая линия фона — есть, но не толще 2 dp. */
+    @Test fun thinGapsLikeApple() {
         show()
-        val b = shot("mosaic")
-        val tile = b.width / 3
+        val b = shot("grid")
         val y = b.height / 2
-        val seam = b.getPixel(tile, y)
-        assertTrue("на стыке фон, а не кадр", seam != android.graphics.Color.WHITE)
+        val page = android.graphics.Color.WHITE
+        // ищем линию у стыка первого и второго столбца
+        val near = (b.width / 3 - 8..b.width / 3 + 8).filter { b.getPixel(it, y) == page }
+        val d = rule.activity.resources.displayMetrics.density
+        assertTrue("линии между кадрами нет", near.isNotEmpty())
+        assertTrue("линия толще 2 dp: ${near.size}px", near.size <= (2 * d).toInt() + 1)
     }
 
     /**
@@ -234,10 +237,11 @@ class FeedUiTest {
         val tile = fast.width / 3
         val page = android.graphics.Color.WHITE
         // стыки столбцов и рядов по всей высоте сетки, кроме самых краёв
+        // разрыв — это фон там, где в покое был кадр (тонкие линии сетки на своих местах не в счёт)
         var torn = 0; var changed = 0
-        for (y in fast.height / 8 until fast.height * 3 / 4 step 6) {
-            if (fast.getPixel(tile, y) == page || fast.getPixel(tile * 2, y) == page) torn++
-            if (fast.getPixel(tile / 2, y) != calm0.getPixel(tile / 2, y)) changed++
+        for (y in fast.height / 8 until fast.height * 3 / 4 step 3) for (x in listOf(tile / 2, tile + tile / 2)) {
+            if (fast.getPixel(x, y) == page && calm0.getPixel(x, y) != page) torn++
+            if (fast.getPixel(x, y) != calm0.getPixel(x, y)) changed++
         }
         assertEquals("полотно порвалось", 0, torn)
         assertTrue("на скорости ничего не тянется", changed > 20)
