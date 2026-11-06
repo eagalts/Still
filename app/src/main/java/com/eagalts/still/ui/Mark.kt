@@ -26,6 +26,10 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.rotate
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -37,54 +41,65 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Знак Still — родня знаку Plume. У Plume волна и точка; у Still та же волна успокоилась в гладь,
- * а точка поднялась над ней солнцем: «тихий кадр». Стиль тот же — стикер: тень, белая окантовка, градиент.
+ * Знак Still — диафрагма: три лопасти, закрученные вокруг просвета. Плоский, как у Linear и Apple, —
+ * от фото его отделяет только мягкая тень.
  *
- * [ripple] — рябь по глади (знак со знаком: пружина проходит через ноль — волна переворачивается, как настоящая);
- * [lift] — насколько точка подпрыгнула (доля размера); [phase] — сдвиг волны (бежит вместе с лентой).
+ * Контур строится один раз на размер и раскрытие и кэшируется; поворот — преобразованием при отрисовке,
+ * поэтому вращение вслед за лентой ничего не аллоцирует.
  */
-fun DrawScope.drawStillMark(s: Float, ripple: Float = 0f, lift: Float = 0f, phase: Float = 0f) {
-    val y0 = s * 0.67f
-    val x0 = s * 0.15f; val x1 = s * 0.85f
-    val line = Path().apply {
-        val n = 28
-        for (i in 0..n) {
-            val f = i / n.toFloat()
-            // огибающая sin(πf): концы на месте, рябь — в середине
-            val y = y0 + ripple * s * 0.075f * sin(f * 3f * PI.toFloat() + phase) * sin(f * PI.toFloat())
-            val x = x0 + (x1 - x0) * f
-            if (i == 0) moveTo(x, y) else lineTo(x, y)
+class MarkShape {
+    private var s = -1f
+    private var iris = -1f
+    private var path = Path()
+
+    fun path(size: Float, open: Float): Path {
+        val o = (open * 50f).roundToInt() / 50f
+        if (size == s && o == iris) return path
+        s = size; iris = o
+        val c = size / 2f; val r = size * 0.48f
+        val blades = Path()
+        for (a in intArrayOf(0, 120, 240)) {
+            var first = true
+            var t = 0
+            while (t <= 180) {
+                val ang = Math.toRadians((a + t * 0.8).toDouble())
+                val rr = r * sin(Math.toRadians(t.toDouble())).toFloat()
+                val x = c + rr * cos(ang).toFloat(); val y = c - rr * sin(ang).toFloat()
+                if (first) { blades.moveTo(x, y); first = false } else blades.lineTo(x, y)
+                t += 6
+            }
+            blades.close()
         }
+        // просвет: при «глотке» сходится в точку
+        val h = r * 0.17f * o
+        path = if (h < 0.5f) blades else Path().apply {
+            op(blades, Path().apply { addOval(androidx.compose.ui.geometry.Rect(c - h, c - h, c + h, c + h)) }, androidx.compose.ui.graphics.PathOperation.Difference)
+        }
+        return path
     }
-    val dot = Offset(s * 0.5f, s * (0.33f - lift))
-    val rOut = s * 0.155f; val rIn = s * 0.1f
-    val fill = Brush.linearGradient(
-        listOf(Color(0xFF8FB8FF), Color(0xFFB5A8FF), Color(0xFFFFC2A8)),
-        start = Offset(s * 0.1f, s * 0.15f), end = Offset(s * 0.9f, s * 0.8f),
-    )
-    val outline = Stroke(s * 0.25f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    val body = Stroke(s * 0.16f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    val shadow = Color(0x33404A8C)
-    translate(0f, s * 0.03f) {
-        drawPath(line, shadow, style = outline)
-        drawCircle(shadow, rOut, dot)
+}
+
+private val MarkFill = listOf(Color(0xFF6EA5FF), Color(0xFFA591FF), Color(0xFFFFB9A0))
+
+/** [turn] — поворот в градусах; [open] — раскрытие просвета 0…1. */
+fun DrawScope.drawStillMark(s: Float, turn: Float = 0f, open: Float = 1f, shape: MarkShape = MarkShape()) {
+    val p = shape.path(s, open.coerceIn(0f, 1f))
+    rotate(turn, Offset(s / 2f, s / 2f)) {
+        // мягкая тень: три слоя со сдвигом — читается на любом кадре, без подложки
+        for (i in 1..3) translate(0f, s * 0.018f * i) { drawPath(p, Color.Black, alpha = 0.07f) }
+        drawPath(p, Brush.linearGradient(MarkFill, start = Offset(s * 0.2f, s * 0.15f), end = Offset(s * 0.8f, s * 0.9f)))
     }
-    drawPath(line, Color.White, style = outline)
-    drawCircle(Color.White, rOut, dot)
-    drawPath(line, fill, style = body)
-    drawCircle(fill, rIn, dot)
 }
 
 /**
- * Знак внизу — единственная кнопка Still. Нажатие: проседает пружиной; отпустил — по глади бежит рябь,
- * солнце подпрыгивает и садится. Гладь успокаивается сама — к моменту, когда шторка доехала.
+ * Знак внизу — единственная кнопка Still. Нажатие: проседает пружиной; отпустил — лопасти проворачиваются,
+ * как затвор, просвет вздрагивает. Листаешь — знак медленно поворачивается вслед за лентой.
  */
 @Composable
 fun StillMark(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Рябь от прокрутки ленты, 0…1 (читается при отрисовке — без рекомпозиций). */
-    energy: () -> Float = { 0f },
+    /** Поворот вслед за лентой, в градусах (читается при отрисовке — без рекомпозиций). */
     phase: () -> Float = { 0f },
     /** Растёт, когда в знак стекают пиксели удалённых кадров: знак «глотает». */
     gulp: Int = 0,
@@ -97,25 +112,26 @@ fun StillMark(
         spring(dampingRatio = if (pressed) 0.9f else 0.42f, stiffness = if (pressed) 1400f else 520f), label = "markPress",
     )
     val taps = remember { mutableIntStateOf(0) }
-    val ripple = remember { Animatable(0f) }
-    val lift = remember { Animatable(0f) }
+    val spin = remember { Animatable(0f) }
+    val iris = remember { Animatable(1f) }
+    val shape = remember { MarkShape() }
+    // тап: лопасти проворачиваются на треть оборота с перелётом, как затвор, и просвет вздрагивает
     LaunchedEffect(taps.intValue) {
         if (taps.intValue == 0) return@LaunchedEffect
-        ripple.snapTo(1f)
-        ripple.animateTo(0f, spring(0.3f, 260f))
+        spin.animateTo(spin.value + 120f, spring(0.55f, 260f))
     }
     LaunchedEffect(taps.intValue) {
         if (taps.intValue == 0) return@LaunchedEffect
-        lift.animateTo(0.07f, spring(0.9f, 1800f))
-        lift.animateTo(0f, spring(0.38f, 420f))
+        iris.animateTo(0.55f, spring(1f, 1600f)); iris.animateTo(1f, spring(0.45f, 420f))
     }
     val swallow = remember { Animatable(1f) }
     LaunchedEffect(gulp) {
         if (gulp == 0) return@LaunchedEffect
-        // пиксели долетают к концу распада — тогда знак и сглатывает
-        kotlinx.coroutines.delay(560)
-        swallow.animateTo(1.22f, spring(0.9f, 1600f))
-        swallow.animateTo(1f, spring(0.35f, 380f))
+        // пыль долетает — диафрагма закрывается, «проглатывает» и раскрывается обратно
+        kotlinx.coroutines.delay(480)
+        launch { spin.animateTo(spin.value + 60f, spring(0.7f, 300f)) }
+        launch { swallow.animateTo(1.12f, spring(0.9f, 1400f)); swallow.animateTo(1f, spring(0.4f, 380f)) }
+        iris.animateTo(0f, spring(1f, 900f)); iris.animateTo(1f, spring(0.5f, 300f))
     }
     Box(
         // диск со знаком проседает при нажатии и «сглатывает» целиком, вместе со стеклом
@@ -131,10 +147,10 @@ fun StillMark(
         contentAlignment = Alignment.Center,
     ) {
         Canvas(
-            Modifier.size(38.dp)
+            Modifier.size(44.dp)
         ) {
-            val e = energy().coerceIn(0f, 1f)
-            drawStillMark(size.width, ripple.value + e * 0.9f, lift.value, phase())
+            // вслед за лентой знак медленно поворачивается — плавно, без ряби
+            drawStillMark(size.width, spin.value + phase(), iris.value, shape)
         }
     }
 }

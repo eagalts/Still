@@ -306,6 +306,20 @@ class FeedUiTest {
         until { still.feed.cells.none { it.key == 300L } && still.leaving.isEmpty() }
     }
 
+    /** Знак — диафрагма: на тап лопасти проворачиваются (картинка знака меняется), потом успокаиваются. */
+    @Test fun markTurnsLikeShutterOnTap() {
+        show()
+        val r = rule.onNodeWithTag("still-mark").fetchSemanticsNode().boundsInRoot
+        fun crop(b: Bitmap) = Bitmap.createBitmap(b, r.left.toInt(), r.top.toInt(), r.width.toInt(), r.height.toInt())
+        val calm = crop(shot("mark-calm"))
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("still-mark").performClick()
+        repeat(8) { rule.mainClock.advanceTimeBy(16); org.robolectric.shadows.ShadowLooper.idleMainLooper(16, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        val turning = crop(shot("mark-turn", settle = false))
+        assertTrue("знак не повернулся", !calm.sameAs(turning))
+        rule.mainClock.autoAdvance = true
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

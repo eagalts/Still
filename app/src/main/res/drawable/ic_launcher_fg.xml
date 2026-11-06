@@ -1,28 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Знак Still (как ui/Mark.kt): гладь и солнце над ней, стикером — белая окантовка, градиент рассвета. -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
+<!-- Знак Still — диафрагма из трёх лопастей с просветом (как ui/Mark.kt). Рисунок сгенерирован той же формулой. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:pathData="M34.4,65.2L73.6,65.2" android:strokeColor="#33404A8C" android:strokeWidth="14" android:strokeLineCap="round" />
-    <path android:pathData="M54,46.2m-8.7,0a8.7,8.7 0,1 1,17.4 0a8.7,8.7 0,1 1,-17.4 0" android:fillColor="#33404A8C" />
-    <path android:pathData="M34.4,63.5L73.6,63.5" android:strokeColor="#FFFFFFFF" android:strokeWidth="14" android:strokeLineCap="round" />
-    <path android:pathData="M54,44.5m-8.7,0a8.7,8.7 0,1 1,17.4 0a8.7,8.7 0,1 1,-17.4 0" android:fillColor="#FFFFFFFF" />
-    <path android:pathData="M34.4,63.5L73.6,63.5" android:strokeWidth="9" android:strokeLineCap="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient android:type="linear" android:startX="31.6" android:startY="34.4" android:endX="76.4" android:endY="70.8">
-                <item android:offset="0" android:color="#FF8FB8FF" />
-                <item android:offset="0.5" android:color="#FFB5A8FF" />
-                <item android:offset="1" android:color="#FFFFC2A8" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <path android:pathData="M54,44.5m-5.6,0a5.6,5.6 0,1 1,11.2 0a5.6,5.6 0,1 1,-11.2 0">
+    <path android:pathData="M54.00,54.00 L57.23,53.73 L60.36,52.93 L63.28,51.62 L65.91,49.85 L68.16,47.70 L69.97,45.22 L71.28,42.52 L72.05,39.69 L72.28,36.83 L71.96,34.05 L71.12,31.44 L69.80,29.11 L68.05,27.13 L65.95,25.58 L63.58,24.52 L61.04,23.98 L58.43,24.00 L55.85,24.58 L53.41,25.69 L51.19,27.30 L49.30,29.36 L47.80,31.81 L46.77,34.56 L46.24,37.51 L46.25,40.58 L46.80,43.65 L47.89,46.62 L49.49,49.40 L51.55,51.88 L54.00,54.00Z">
         <aapt:attr name="android:fillColor">
-            <gradient android:type="linear" android:startX="31.6" android:startY="34.4" android:endX="76.4" android:endY="70.8">
-                <item android:offset="0" android:color="#FF8FB8FF" />
-                <item android:offset="0.5" android:color="#FFB5A8FF" />
-                <item android:offset="1" android:color="#FFFFC2A8" />
+            <gradient android:type="linear" android:startX="30" android:startY="26" android:endX="80" android:endY="84">
+                <item android:offset="0" android:color="#FF6EA5FF" />
+                <item android:offset="0.5" android:color="#FFA591FF" />
+                <item android:offset="1" android:color="#FFFFB9A0" />
             </gradient>
         </aapt:attr>
     </path>
+    <path android:pathData="M54.00,54.00 L52.15,51.34 L49.89,49.03 L47.30,47.16 L44.46,45.76 L41.46,44.89 L38.41,44.56 L35.42,44.78 L32.58,45.52 L29.99,46.75 L27.74,48.42 L25.90,50.45 L24.54,52.77 L23.70,55.27 L23.41,57.86 L23.68,60.45 L24.49,62.91 L25.81,65.16 L27.59,67.11 L29.78,68.67 L32.28,69.78 L35.01,70.39 L37.88,70.46 L40.78,69.98 L43.60,68.96 L46.25,67.42 L48.63,65.41 L50.66,62.98 L52.27,60.21 L53.39,57.18 L54.00,54.00Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="30" android:startY="26" android:endX="80" android:endY="84">
+                <item android:offset="0" android:color="#FF6EA5FF" />
+                <item android:offset="0.5" android:color="#FFA591FF" />
+                <item android:offset="1" android:color="#FFFFB9A0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M54.00,54.00 L52.62,56.93 L51.75,60.04 L51.42,63.23 L51.64,66.39 L52.38,69.42 L53.62,72.22 L55.30,74.70 L57.37,76.79 L59.73,78.42 L62.30,79.53 L64.97,80.11 L67.66,80.13 L70.25,79.60 L72.64,78.56 L74.74,77.04 L76.47,75.10 L77.76,72.83 L78.56,70.32 L78.82,67.64 L78.53,64.92 L77.68,62.25 L76.31,59.73 L74.45,57.46 L72.16,55.52 L69.50,54.00 L66.56,52.94 L63.45,52.40 L60.24,52.40 L57.06,52.93 L54.00,54.00Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="30" android:startY="26" android:endX="80" android:endY="84">
+                <item android:offset="0" android:color="#FF6EA5FF" />
+                <item android:offset="0.5" android:color="#FFA591FF" />
+                <item android:offset="1" android:color="#FFFFB9A0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="@color/icon_bg" android:pathData="M48.73,54.00a5.27,5.27 0,1 1,10.54,0a5.27,5.27 0,1 1,-10.54,0z" />
 </vector>

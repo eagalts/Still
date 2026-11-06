@@ -111,7 +111,7 @@ private fun Welcome(onAsk: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Canvas(Modifier.size(96.dp)) { drawStillMark(size.width, ripple.value, (rise.value - 1f) * -0.12f) }
+        Canvas(Modifier.size(96.dp)) { drawStillMark(size.width, (1f - rise.value) * -120f, rise.value.coerceIn(0f, 1f)) }
         Spacer(Modifier.height(20.dp))
         Text("Still", color = p.text, fontSize = 34.sp, fontWeight = FontWeight.Bold, fontFamily = UiFont,
             modifier = Modifier.graphicsLayer { alpha = rise.value.coerceIn(0f, 1f); translationY = (1f - rise.value) * 24f })
