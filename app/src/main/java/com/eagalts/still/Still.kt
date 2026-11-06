@@ -299,8 +299,57 @@ class Still(
     }
 
     /** В системную корзину (30 дней). Плитки начинают уходить сразу; система отказала — возвращаются. */
-    fun trash(items: List<MediaItem>, restore: Boolean = false) {
+    /**
+     * Без особого доступа «Управление медиафайлами» Android подтверждает каждое удаление своим окном.
+     * Один раз — при первом удалении — Still предлагает выдать доступ; дальше корзина работает без окон.
+     */
+    var askManage: List<MediaItem>? by mutableStateOf(null)
+    private var afterManage: List<MediaItem>? = null
+
+    private val prefs get() = ctx?.getSharedPreferences("still", Context.MODE_PRIVATE)
+
+    /** Есть ли доступ «Управление медиафайлами» (подменяется в тестах). */
+    var canManage: () -> Boolean = ::canManageMedia
+
+    private fun canManageMedia(): Boolean {
+        val c = ctx ?: return false
+        return android.os.Build.VERSION.SDK_INT >= 31 && runCatching { android.provider.MediaStore.canManageMedia(c) }.getOrDefault(false)
+    }
+
+    /** «Разрешить»: открыть системный экран доступа; вернулись — удаление продолжится само. */
+    fun grantManage() {
+        val c = ctx ?: return
+        afterManage = askManage; askManage = null
+        prefs?.edit()?.putBoolean("manageAsked", true)?.apply()
+        runCatching {
+            c.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_REQUEST_MANAGE_MEDIA, android.net.Uri.parse("package:" + c.packageName))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { afterManage?.let { trash(it, ask = false) }; afterManage = null }
+    }
+
+    /** «Не сейчас»: удаляем как раньше, с окном Android, и больше не спрашиваем. */
+    fun skipManage() {
+        val items = askManage ?: return
+        askManage = null
+        prefs?.edit()?.putBoolean("manageAsked", true)?.apply()
+        trash(items, ask = false)
+    }
+
+    /** Вернулись в Still после настроек доступа — доводим начатое удаление. */
+    fun resumed() {
+        val items = afterManage ?: return
+        afterManage = null
+        trash(items, ask = false)
+    }
+
+    fun trash(items: List<MediaItem>, restore: Boolean = false, ask: Boolean = true) {
         if (items.isEmpty() || ctx == null) return
+        if (ask && !restore && android.os.Build.VERSION.SDK_INT >= 31 && !canManage() && prefs?.getBoolean("manageAsked", false) != true) {
+            askManage = items
+            return
+        }
         val ids = items.map { it.id }.toSet()
         val sender = Actions.trashRequest(ctx, items.map(lib::uri), !restore) ?: run { toast(t("Android не дал убрать")); return }
         request = SystemRequest(sender) { ok -> if (ok) removed(ids, restore) }

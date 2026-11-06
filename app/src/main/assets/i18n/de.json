@@ -40,5 +40,9 @@
  "Убрать {0}": "{0} entfernen",
  "Удалить": "Löschen",
  "Уйдёт в Поток через {0} дн.": "Geht in {0} T. in den Strom",
- "синее летом 2023 вечером": "blau Sommer 2023 abends"
+ "синее летом 2023 вечером": "blau Sommer 2023 abends",
+ "Удалять без лишних вопросов": "Löschen ohne Rückfragen",
+ "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android fragt bei jedem Löschen nach. Erlaube Still, Medien zu verwalten – das ist eine einmalige Einstellung. Fotos landen weiterhin 30 Tage im Papierkorb.",
+ "Разрешить": "Erlauben",
+ "Не сейчас": "Nicht jetzt"
 }

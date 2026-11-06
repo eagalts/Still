@@ -40,5 +40,9 @@
  "Убрать {0}": "Remove {0}",
  "Удалить": "Delete",
  "Уйдёт в Поток через {0} дн.": "Moves to Flow in {0} d",
- "синее летом 2023 вечером": "blue summer 2023 evening"
+ "синее летом 2023 вечером": "blue summer 2023 evening",
+ "Удалять без лишних вопросов": "Delete without extra prompts",
+ "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android asks you to confirm every deletion. Let Still manage media — it's a one-time setting. Photos still go to the trash for 30 days.",
+ "Разрешить": "Allow",
+ "Не сейчас": "Not now"
 }

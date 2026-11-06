@@ -40,5 +40,9 @@
  "Убрать {0}": "Retirer {0}",
  "Удалить": "Supprimer",
  "Уйдёт в Поток через {0} дн.": "Part dans le Flux dans {0} j",
- "синее летом 2023 вечером": "bleu été 2023 soir"
+ "синее летом 2023 вечером": "bleu été 2023 soir",
+ "Удалять без лишних вопросов": "Supprimer sans confirmation",
+ "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android demande de confirmer chaque suppression. Autorisez Still à gérer les médias : un réglage unique. Les photos vont toujours à la corbeille pendant 30 jours.",
+ "Разрешить": "Autoriser",
+ "Не сейчас": "Pas maintenant"
 }

@@ -320,6 +320,26 @@ class FeedUiTest {
         rule.mainClock.autoAdvance = true
     }
 
+    /**
+     * Без доступа «Управление медиафайлами» первое удаление предлагает его один раз; «Не сейчас» — удаление
+     * идёт как раньше, и больше Still не спрашивает.
+     */
+    @Test fun offersManageMediaOnceBeforeFirstDelete() {
+        still.canManage = { false }   // как на телефоне до выдачи доступа
+        show()
+        val item = still.all.first { it.id == 300L }
+        rule.runOnIdle { still.trash(listOf(item)) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("manage-sheet").assertExists()
+        shot("manage-sheet")
+        rule.onNodeWithTag("manage-skip").performClick()
+        rule.waitForIdle()
+        assertEquals(null, still.askManage)
+        rule.runOnIdle { still.trash(listOf(item)) }
+        rule.waitForIdle()
+        assertEquals("спросил второй раз", null, still.askManage)
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -82,6 +83,7 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedCon
                             BottomLayer(s, ctl)
                         }
                         MarkSheet(s, ctl)
+                        ManageSheet(s)
                         Viewer(s, ctl)
                     }
                 }
@@ -170,4 +172,38 @@ private fun CrashDialog(s: Still) {
         }
     }
 }
+
+
+
+/**
+ * Один раз, при первом удалении: Android подтверждает каждое удаление своим окном — Still предлагает
+ * выдать доступ «Управление медиафайлами», и дальше корзина работает без окон. Фото всё так же уходят
+ * в корзину на 30 дней.
+ */
+@Composable
+private fun ManageSheet(s: Still) {
+    val p = LocalPalette.current
+    Sheet(s.askManage != null, onDismiss = { s.skipManage() }) {
+        Column(Modifier.padding(horizontal = 24.dp).testTag("manage-sheet")) {
+            Text(t("Удалять без лишних вопросов"), color = p.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                t("Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней."),
+                color = p.muted, fontSize = 15.sp, lineHeight = 21.sp, fontFamily = UiFont,
+            )
+            Spacer(Modifier.height(20.dp))
+            Text(
+                t("Разрешить"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag("manage-allow").bouncy(0.96f) { s.grantManage() }
+                    .clip(RoundedCornerShape(50)).background(p.accent).padding(vertical = 15.dp),
+            )
+            Text(
+                t("Не сейчас"), color = p.muted, fontSize = 15.sp, fontFamily = UiFont, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag("manage-skip").bouncy(0.96f) { s.skipManage() }.padding(vertical = 14.dp),
+            )
+        }
+    }
+}
+
 

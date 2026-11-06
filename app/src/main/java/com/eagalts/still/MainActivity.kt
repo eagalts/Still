@@ -118,6 +118,11 @@ class MainActivity : ComponentActivity() {
 
     private fun ask() = perms.launch(wanted())
 
+    override fun onResume() {
+        super.onResume()
+        still.resumed()
+    }
+
     override fun onStart() {
         super.onStart()
         refreshAccess()
