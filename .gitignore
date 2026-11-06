@@ -1,0 +1,21 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+dist/
+
+# в git — только код и README
+CLAUDE.md
+.claude/
+docs/
+*.md
+!README.md
+
+# ключ подписи — только локально
+*.keystore
+*.jks

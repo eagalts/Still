@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Знак Still (как ui/Mark.kt): гладь и солнце над ней, стикером — белая окантовка, градиент рассвета. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M34.4,65.2L73.6,65.2" android:strokeColor="#33404A8C" android:strokeWidth="14" android:strokeLineCap="round" />
+    <path android:pathData="M54,46.2m-8.7,0a8.7,8.7 0,1 1,17.4 0a8.7,8.7 0,1 1,-17.4 0" android:fillColor="#33404A8C" />
+    <path android:pathData="M34.4,63.5L73.6,63.5" android:strokeColor="#FFFFFFFF" android:strokeWidth="14" android:strokeLineCap="round" />
+    <path android:pathData="M54,44.5m-8.7,0a8.7,8.7 0,1 1,17.4 0a8.7,8.7 0,1 1,-17.4 0" android:fillColor="#FFFFFFFF" />
+    <path android:pathData="M34.4,63.5L73.6,63.5" android:strokeWidth="9" android:strokeLineCap="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="31.6" android:startY="34.4" android:endX="76.4" android:endY="70.8">
+                <item android:offset="0" android:color="#FF8FB8FF" />
+                <item android:offset="0.5" android:color="#FFB5A8FF" />
+                <item android:offset="1" android:color="#FFFFC2A8" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M54,44.5m-5.6,0a5.6,5.6 0,1 1,11.2 0a5.6,5.6 0,1 1,-11.2 0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="31.6" android:startY="34.4" android:endX="76.4" android:endY="70.8">
+                <item android:offset="0" android:color="#FF8FB8FF" />
+                <item android:offset="0.5" android:color="#FFB5A8FF" />
+                <item android:offset="1" android:color="#FFFFC2A8" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
