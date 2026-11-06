@@ -405,6 +405,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         // фото идут под строку состояния; место сверху — только под капсулу фильтра
         // пружина капсулы проскакивает ноль — отступ отрицательным не бывает
         val padTop = (top + 56.dp) * capsule.coerceIn(0f, 1f)
+        // под линзой лента ходит «по магнитам»: после прокрутки ближайший ряд встаёт ровно в центр экрана.
+        // Поля сверху и снизу — по полэкрана: и самый старый, и самый свежий ряд тоже доезжают до центра линзы
+        val lensOn = Lens.strengthFor(feed.cols) > 0f
+        val center = remember(feed.cols, lensOn) { CenterSnap }
+        val snap = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(
+            remember(ctl.grid, center) { androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider(ctl.grid, center) }
+        )
+        val fling = if (lensOn) snap else androidx.compose.foundation.gestures.ScrollableDefaults.flingBehavior()
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val half = if (lensOn) ((maxHeight - maxWidth / feed.cols) / 2).coerceAtLeast(0.dp) else 0.dp
         LazyVerticalGrid(
             columns = GridCells.Fixed(feed.cols),
             state = ctl.grid,
@@ -416,7 +426,8 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
                 )
             },
-            contentPadding = PaddingValues(top = padTop, bottom = bottom),
+            contentPadding = PaddingValues(top = maxOf(padTop, half), bottom = maxOf(bottom, half)),
+            flingBehavior = fling,
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols)),
             // кадров меньше, чем экран, — они лежат внизу, у знака, а не висят сверху
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols), Alignment.Bottom),
@@ -444,6 +455,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     )
                 }
             }
+        }
         }
         if (s.loaded && feed.cells.isEmpty()) Empty(s.filter)
         // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
@@ -863,4 +875,15 @@ private fun androidx.compose.foundation.layout.BoxScope.PeriodLabel(label: Strin
         modifier = Modifier.align(Alignment.TopStart).wrapContentWidth(Alignment.Start, unbounded = true)
             .padding(start = 6.dp, top = 4.dp),
     )
+}
+
+
+/**
+ * Магнит линзы: центр ряда — в центр всего экрана (а не области между полями), там, где линза
+ * рисует кадр в полный размер.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private object CenterSnap : androidx.compose.foundation.gestures.snapping.SnapPosition {
+    override fun position(layoutSize: Int, itemSize: Int, beforeContentPadding: Int, afterContentPadding: Int, itemIndex: Int, itemCount: Int): Int =
+        layoutSize / 2 - itemSize / 2 - beforeContentPadding
 }

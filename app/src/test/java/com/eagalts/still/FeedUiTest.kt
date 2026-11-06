@@ -10,6 +10,7 @@ import android.os.CancellationSignal
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -190,10 +191,10 @@ class FeedUiTest {
         assertEquals(103L, (cells.last() as Cell.Tile).item.id)
         val tiles = cells.filterIsInstance<Cell.Tile>().map { it.item.taken }
         assertEquals(tiles.sorted(), tiles)
-        // и лента открылась на ней: плитка на экране, у нижнего края
+        // и лента открылась на ней: свежий ряд — ровно в центре линзы, крупно, а не мелко у края
         val r = rule.onNodeWithTag("tile-103").fetchSemanticsNode().boundsInRoot
-        val h = rule.activity.window.decorView.height
-        assertTrue("свежее не внизу: ${r.bottom} из $h", r.bottom > h * 0.7f)
+        val h = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot.height
+        assertEquals("свежее не в центре", h / 2f, r.center.y, 3f)
         shot("feed-bottom")
     }
 
@@ -239,19 +240,37 @@ class FeedUiTest {
      */
     @Test fun lensAtRestFlattensWhenFast() {
         show()
+        // полный ряд над центральным (свежий ряд может быть неполным) и самый верхний видимый ряд
+        val infos = ctl.grid.layoutInfo.visibleItemsInfo
+        val rows = infos.groupBy { it.row }.filter { it.value.size == 3 }.toSortedMap()
+        val near = rows.values.last()[0]; val far = rows.values.first()[0]
+        fun rowY(i: androidx.compose.foundation.lazy.grid.LazyGridItemInfo) = (i.offset.y - ctl.grid.layoutInfo.viewportStartOffset + i.size.height / 2)
         val rest = shot("lens-rest")
         val d = rule.activity.resources.displayMetrics.density
-        val h = rest.height
-        val center = background(rest, h / 2)
-        val edge = maxOf(background(rest, (h * 0.12f).toInt()), background(rest, (h * 0.14f).toInt()))
-        assertTrue("в покое края не меньше центра: край $edge, центр $center", edge > center + (20 * d).toInt() / 2)
+        val nearBg = background(rest, rowY(near)); val farBg = background(rest, rowY(far))
+        assertTrue("в покое дальний ряд не меньше ближнего: $farBg против $nearBg", farBg > nearBg + (12 * d).toInt())
         rule.mainClock.autoAdvance = false
         rule.runOnIdle { ctl.velocity = 4000f }
         rule.mainClock.advanceTimeByFrame(); rule.waitForIdle()
         val fast = shot("lens-fast", settle = false)
-        val fEdge = maxOf(background(fast, (h * 0.12f).toInt()), background(fast, (h * 0.14f).toInt()))
-        assertTrue("на скорости линза не выпрямилась: край $fEdge, был $edge", fEdge < edge - (10 * d).toInt() / 2)
+        val fastFar = background(fast, rowY(far))
+        assertTrue("на скорости линза не выпрямилась: $fastFar, было $farBg", fastFar < farBg - (6 * d).toInt())
         rule.mainClock.autoAdvance = true
+    }
+
+    /** Магниты: как ни листай, после остановки ближайший ряд встаёт ровно в центр экрана. */
+    @Test fun rowsSnapToTheCenter() {
+        show()
+        val h = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot.height
+        for ((dy, ms) in listOf(-260f to 300L, 140f to 120L, -900f to 140L)) {
+            rule.onNodeWithTag("feed").performTouchInput {
+                swipe(androidx.compose.ui.geometry.Offset(width / 2f, height * 0.6f), androidx.compose.ui.geometry.Offset(width / 2f, height * 0.6f - dy), ms)
+            }
+            rule.mainClock.advanceTimeBy(2500); rule.waitForIdle()
+            val centers = ctl.grid.layoutInfo.visibleItemsInfo.map { it.offset.y - ctl.grid.layoutInfo.viewportStartOffset + it.size.height / 2f }
+            val nearest = centers.minBy { kotlin.math.abs(it - h / 2f) }
+            assertEquals("ряд не встал в центр после прокрутки на $dy", h / 2f, nearest, 3f)
+        }
     }
 
     /** Тап по кадру у края (под линзой он меньше своей ячейки и сдвинут к центру) открывает именно его. */
@@ -310,6 +329,8 @@ class FeedUiTest {
 
     @Test fun longPressSelectsAndOffersSimilar() {
         show()
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == 500L }) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithTag("tile-500").performTouchInput { longClick() }
         rule.waitForIdle()
         assertEquals(setOf(500L), still.selection)

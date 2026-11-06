@@ -98,8 +98,10 @@ fun BottomLayer(s: Still, ctl: FeedController) {
                         androidx.compose.runtime.LaunchedEffect(s.leaving) { if (s.leaving.isNotEmpty()) gulps.intValue++ }
                         StillMark(
                             onClick = { s.sheet = true },
-                            energy = { kotlin.math.abs(ctl.velocity) / unit },
-                            phase = { ctl.phase / unit },
+                            // рябь от ленты — лёгкая и медленная: волна идёт в шесть раз медленнее ленты и не выше трети,
+                            // иначе на быстрой прокрутке знак превращался в мельтешение
+                            energy = { (kotlin.math.abs(ctl.velocity) / unit).coerceAtMost(1f) * 0.32f },
+                            phase = { ctl.phase / (unit * 6f) },
                             gulp = gulps.intValue,
                         )
                     }
