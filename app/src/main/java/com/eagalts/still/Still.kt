@@ -38,11 +38,13 @@ sealed class Filter {
     }
 }
 
-/** Ячейка сетки: подпись дня/месяца/года или плитка. [inStack] — кадр раскрытой стопки (не обложка). */
+/**
+ * Ячейка сетки — кадр. [inStack] — кадр раскрытой стопки (не обложка). [label] — подпись месяца или года
+ * на первом кадре периода (при отдалении): подпись лежит на фото, а не отдельной полосой.
+ */
 sealed class Cell {
     abstract val key: Any
-    data class Header(override val key: String, val label: String) : Cell()
-    class Tile(val entry: Entry, val item: MediaItem, val inStack: Boolean) : Cell() {
+    class Tile(val entry: Entry, val item: MediaItem, val inStack: Boolean, val label: String? = null) : Cell() {
         override val key: Any get() = item.id
     }
 }
@@ -74,6 +76,7 @@ class Still(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     val thumbs = Thumbs(ctx, lib, index)
+    private val screenWidthDp: Float = (ctx?.resources?.configuration?.screenWidthDp ?: 412).toFloat()
 
     var access by mutableStateOf(Access.NONE)
     var all: List<MediaItem> by mutableStateOf(emptyList()); private set
@@ -166,10 +169,21 @@ class Still(
         val out = ArrayList<Cell>(entries.size + entries.size / 8)
         val cal = Calendar.getInstance()
         var lastPeriod = Long.MIN_VALUE
+        // подписи не наезжают друг на друга: ставим, только если до конца ряда и до следующей подписи хватает места
+        val tileDp = screenWidthDp / cols
+        fun need(label: String) = kotlin.math.ceil((label.length * (if (level == Level.YEARS) 13f else 9f) + 14f) / tileDp).toInt().coerceAtLeast(1)
+        var lastLabelAt = Int.MIN_VALUE / 2; var lastNeed = 0
         for (e in entries) {
             val p = if (level == Level.NONE) 0L else period(cal, e.cover.taken, level)
-            if (level != Level.NONE && p != lastPeriod) { out += Cell.Header("h$p", Dates.label(e.cover.taken, level)); lastPeriod = p }
-            out += Cell.Tile(e, e.cover, false)
+            var label = if (level != Level.NONE && p != lastPeriod) Dates.label(e.cover.taken, level) else null
+            lastPeriod = p
+            if (label != null) {
+                val at = out.size; val col = at % cols; val n = need(label)
+                val sameRow = at / cols == lastLabelAt / cols
+                if (col + n > cols || (sameRow && at - lastLabelAt < lastNeed)) label = null
+                else { lastLabelAt = at; lastNeed = n }
+            }
+            out += Cell.Tile(e, e.cover, false, label)
             if (e.stacked && e.key in exp) e.members.forEach { m -> if (m !== e.cover) out += Cell.Tile(e, m, true) }
         }
         return out

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.CancellationSignal
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -184,7 +185,7 @@ class FeedUiTest {
     @Test fun opensAtNewestAtTheBottomWithoutDates() {
         show()
         val cells = still.feed.cells
-        assertTrue("в обычной ленте подписей нет", cells.none { it is Cell.Header })
+        assertTrue("в обычной ленте подписей нет", cells.all { (it as Cell.Tile).label == null })
         // от старого к новому: последняя плитка — свежая серия
         assertEquals(103L, (cells.last() as Cell.Tile).item.id)
         val tiles = cells.filterIsInstance<Cell.Tile>().map { it.item.taken }
@@ -200,61 +201,75 @@ class FeedUiTest {
         show()
         rule.runOnIdle { still.zoomTo(8) }
         until { still.feed.cols == 8 }
-        val months = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
+        // подписи — на первых кадрах периодов, отдельных полос нет: все ячейки — кадры
+        assertTrue(still.feed.cells.all { it is Cell.Tile })
+        val months = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(months.toString(), months.isNotEmpty() && months.all { Regex("^\\p{L}+ \\d{4}$").matches(it) })
         shot("zoom-months")
         rule.runOnIdle { still.zoomTo(13) }
         until { still.feed.cols == 13 }
-        val years = still.feed.cells.filterIsInstance<Cell.Header>().map { it.label }
+        val years = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(years.isNotEmpty() && years.all { Regex("\\d{4}").matches(it) })
         shot("zoom-years")
     }
 
-    /** Сетка как у Apple: между кадрами тонкая линия фона — есть, но не толще 2 dp. */
-    @Test fun thinGapsLikeApple() {
+    /** Отдалил — линзы нет, сетка как у Apple: между кадрами тонкая линия фона, не толще 2 dp. */
+    @Test fun zoomedOutIsThinAppleGrid() {
         show()
-        val b = shot("grid")
-        val y = b.height / 2
+        rule.runOnIdle { still.zoomTo(8) }
+        until { still.feed.cols == 8 }
+        val b = shot("grid-8")
+        val y = b.height * 3 / 4
         val page = android.graphics.Color.WHITE
-        // ищем линию у стыка первого и второго столбца
-        val near = (b.width / 3 - 8..b.width / 3 + 8).filter { b.getPixel(it, y) == page }
+        val near = (b.width / 8 - 8..b.width / 8 + 8).filter { b.getPixel(it, y) == page }
         val d = rule.activity.resources.displayMetrics.density
         assertTrue("линии между кадрами нет", near.isNotEmpty())
         assertTrue("линия толще 2 dp: ${near.size}px", near.size <= (2 * d).toInt() + 1)
     }
 
+    /** Сколько фона на горизонтали [y] — чем меньше кадры в этом ряду, тем больше фона между ними. */
+    private fun background(b: Bitmap, y: Int): Int {
+        val page = b.getPixel(2, y).let { if (it == android.graphics.Color.WHITE) it else android.graphics.Color.WHITE }
+        return (0 until b.width step 2).count { b.getPixel(it, y) == page }
+    }
+
     /**
-     * Физика: на быстрой прокрутке кадры тянутся вдоль движения — картинка меняется, — но полотно не рвётся:
-     * ни на стыке столбцов, ни между рядами не проступает фон. Остановилась — всё как было.
+     * Линза: в покое кадры у края экрана заметно меньше, чем в центре (между ними больше фона); на быстрой
+     * прокрутке линза выпрямляется — ряды у края и в центре почти одинаковые.
      */
-    @Test fun fastScrollStretchesWithoutTearing() {
+    @Test fun lensAtRestFlattensWhenFast() {
         show()
-        val calm0 = shot("physics-calm")
+        val rest = shot("lens-rest")
+        val d = rule.activity.resources.displayMetrics.density
+        val h = rest.height
+        val center = background(rest, h / 2)
+        val edge = maxOf(background(rest, (h * 0.12f).toInt()), background(rest, (h * 0.14f).toInt()))
+        assertTrue("в покое края не меньше центра: край $edge, центр $center", edge > center + (20 * d).toInt() / 2)
         rule.mainClock.autoAdvance = false
-        rule.runOnIdle { ctl.velocity = 400f }
+        rule.runOnIdle { ctl.velocity = 4000f }
         rule.mainClock.advanceTimeByFrame(); rule.waitForIdle()
-        val fast = shot("physics-fast", settle = false)
-        val tile = fast.width / 3
-        val page = android.graphics.Color.WHITE
-        // стыки столбцов и рядов по всей высоте сетки, кроме самых краёв
-        // разрыв — это фон там, где в покое был кадр (тонкие линии сетки на своих местах не в счёт)
-        var torn = 0; var changed = 0
-        for (y in fast.height / 8 until fast.height * 3 / 4 step 3) for (x in listOf(tile / 2, tile + tile / 2)) {
-            if (fast.getPixel(x, y) == page && calm0.getPixel(x, y) != page) torn++
-            if (fast.getPixel(x, y) != calm0.getPixel(x, y)) changed++
-        }
-        assertEquals("полотно порвалось", 0, torn)
-        assertTrue("на скорости ничего не тянется", changed > 20)
+        val fast = shot("lens-fast", settle = false)
+        val fEdge = maxOf(background(fast, (h * 0.12f).toInt()), background(fast, (h * 0.14f).toInt()))
+        assertTrue("на скорости линза не выпрямилась: край $fEdge, был $edge", fEdge < edge - (10 * d).toInt() / 2)
         rule.mainClock.autoAdvance = true
-        rule.runOnIdle { ctl.velocity = 0f }
-        val calm = shot("physics-calm2")
-        assertEquals(calm0.getPixel(tile / 2, fast.height / 2), calm.getPixel(tile / 2, fast.height / 2))
+    }
+
+    /** Тап по кадру у края (под линзой он меньше своей ячейки и сдвинут к центру) открывает именно его. */
+    @Test fun tapHitsWhatYouSee() {
+        show()
+        val tiles = ctl.grid.layoutInfo.visibleItemsInfo.filter { (it.key as? Long) != null }
+        val top = tiles.minBy { it.offset.y }
+        val r = rule.runOnIdle { ctl.visual(top) }
+        // точка внутри видимого кадра, но у края его ячейки — там, где без учёта линзы был бы соседний кадр
+        rule.onNodeWithTag("feed").performTouchInput { click(androidx.compose.ui.geometry.Offset(r.left + r.width * 0.15f, r.center.y)) }
+        rule.mainClock.advanceTimeBy(600); rule.waitForIdle()
+        assertEquals(top.key, still.viewing?.let { it.items[it.start].id })
     }
 
     /** Удалённое рассыпается и стекает к знаку, а потом исчезает из ленты. */
     @Test fun deletedTilesDissolveIntoMark() {
         show()
-        val r = rule.onNodeWithTag("tile-300").fetchSemanticsNode().boundsInRoot
+        val r = rule.runOnIdle { ctl.bounds(300L)!! }
         val before = shot("dissolve-before")
         rule.mainClock.autoAdvance = false
         rule.runOnIdle { still.removed(setOf(300L)) }

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridItemInfo
@@ -128,6 +129,26 @@ class FeedController(val grid: LazyGridState) {
     var shownFilter: Filter? = null
     var atEnd = true
 
+    // ——— линза ———
+    /** Сила линзы сейчас (анимируется: выбор, отдаление). Быстрая прокрутка ослабляет её ещё — см. [lensNow]. */
+    var lens by androidx.compose.runtime.mutableFloatStateOf(1f)
+    var fastUnit = 1f
+    /** Сила с учётом скорости: несёшься по ленте — линза выпрямляется в плотную сетку. */
+    fun lensNow(): Float = lens * (1f - (abs(velocity) / fastUnit).coerceIn(0f, 1f) * 0.85f)
+    private val pose = FloatArray(4)
+
+    /** Где кадр ячейки виден на самом деле (линза), в координатах сетки. */
+    fun visual(i: LazyGridItemInfo): Rect {
+        val lo = grid.layoutInfo
+        val top = i.offset.y - lo.viewportStartOffset
+        val w = i.size.width.toFloat(); val h = i.size.height.toFloat()
+        val cx = i.offset.x + w / 2f; val cy = top + h / 2f
+        Lens.pose(cx, cy, lo.viewportSize.width.toFloat(), lo.viewportSize.height.toFloat(), lensNow(), pose)
+        val s = pose[Lens.SCALE]
+        val vx = cx + pose[Lens.TX]; val vy = cy + pose[Lens.TY]
+        return Rect(vx - w * s / 2f, vy - h * s / 2f, vx + w * s / 2f, vy + h * s / 2f)
+    }
+
     // ——— физика ———
     /** Скорость прокрутки, px за кадр (сглаженная, со знаком): от неё плитки тянутся, а ряды расходятся. */
     var velocity by androidx.compose.runtime.mutableFloatStateOf(0f)
@@ -145,8 +166,7 @@ class FeedController(val grid: LazyGridState) {
 
     fun bounds(id: Long): Rect? {
         val i = info(id) ?: return null
-        val top = i.offset.y - grid.layoutInfo.viewportStartOffset
-        val r = Rect(origin.x + i.offset.x, origin.y + top, origin.x + i.offset.x + i.size.width, origin.y + top + i.size.height)
+        val r = visual(i).translate(origin)
         val vp = grid.layoutInfo.viewportSize.height
         // плитка под строкой состояния или знаком: прилететь в неё можно, но не в невидимую
         return if (r.bottom < origin.y || r.top > origin.y + vp) null else r
@@ -170,10 +190,9 @@ class FeedController(val grid: LazyGridState) {
     /** Ячейка под точкой (координаты сетки). */
     fun hit(p: Offset): LazyGridItemInfo? {
         val lo = grid.layoutInfo
-        return lo.visibleItemsInfo.firstOrNull {
-            val top = it.offset.y - lo.viewportStartOffset
-            p.x >= it.offset.x && p.x < it.offset.x + it.size.width && p.y >= top && p.y < top + it.size.height
-        }
+        // по тому, что видно: под линзой кадр меньше своей ячейки и сдвинут к центру
+        return lo.visibleItemsInfo.firstOrNull { visual(it).contains(p) }
+            ?: lo.visibleItemsInfo.minByOrNull { (visual(it).center - p).getDistanceSquared() }
     }
 }
 
@@ -195,6 +214,12 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     var pivot by remember { mutableStateOf(Offset.Zero) }
     var anchor by remember { mutableStateOf<Pair<Long, Float>?>(null) }   // кадр под пальцами и его доля по высоте
     var pendingScale by remember { mutableStateOf<Float?>(null) }
+    // линза уступает, когда делаешь: выбор и отдаление выпрямляют её в обычную сетку
+    ctl.fastUnit = with(density) { 48.dp.toPx() }
+    val lensTarget = if (s.selection.isNotEmpty()) 0f else Lens.strengthFor(feed.cols)
+    LaunchedEffect(lensTarget) {
+        androidx.compose.animation.core.animate(ctl.lens, lensTarget, animationSpec = spring(1f, 260f)) { v, _ -> ctl.lens = v }
+    }
     // фото под строкой состояния? тогда значки светлые и под ними тень; лента короче экрана — как обычно
     val topPx = with(density) { top.toPx() }
     val overPhotos by remember {
@@ -406,11 +431,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             items(
                 count = n,
                 key = { feed.cells[it].key },
-                span = { if (feed.cells[it] is Cell.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
-                contentType = { if (feed.cells[it] is Cell.Header) 0 else 1 },
+                contentType = { 1 },
             ) { i ->
                 when (val c = feed.cells[i]) {
-                    is Cell.Header -> Header(c.label, levelOf(feed.cols))
                     is Cell.Tile -> Tile(
                         s, ctl, c, i, feed.cols,
                         Modifier.animateItem(
@@ -441,20 +464,6 @@ private fun tap(s: Still, ctl: FeedController, index: Int) {
         c.entry.stacked && !c.inStack && c.entry.key !in s.expanded -> { ctl.fanKey = c.entry.key; s.toggleStack(c.entry.key) }
         else -> s.view(c.item)
     }
-}
-
-@Composable
-private fun Header(label: String, level: Level) {
-    val p = LocalPalette.current
-    val (size, weight, padTop) = when (level) {
-        Level.NONE -> Triple(15.sp, FontWeight.SemiBold, 18.dp)
-        Level.MONTHS -> Triple(20.sp, FontWeight.Bold, 22.dp)
-        Level.YEARS -> Triple(28.sp, FontWeight.Bold, 26.dp)
-    }
-    Text(
-        label, color = p.text, fontSize = size, fontWeight = weight, fontFamily = UiFont,
-        modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = padTop, bottom = 8.dp),
-    )
 }
 
 @Composable
@@ -492,26 +501,21 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     }
 
     val spot = remember { Spot() }
-    val unit = with(density) { 56.dp.toPx() }
-    val spread = with(density) { 14.dp.toPx() }
+    val pose = remember { FloatArray(4) }
+    val lensRadius = with(density) { 14.dp.toPx() }
     BoxWithConstraints(
-        modifier.zIndex(if (leaving) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
+        modifier.zIndex(if (leaving) 2f else if (c.label != null) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
             .onPlaced { val o = it.positionInParent(); spot.x = o.x; spot.y = o.y; spot.w = it.size.width.toFloat(); spot.h = it.size.height.toFloat() }
             .graphicsLayer {
                 val f = fan.value
-                // физика: быстрая прокрутка тянет кадр вдоль движения и сужает поперёк (объём сохраняется),
-                // а ряды расходятся от центра экрана — дальние отстают, как в желе
-                val v = (ctl.velocity / unit).coerceIn(-1f, 1f)
-                val av = abs(v)
-                val vpH = ctl.grid.layoutInfo.viewportSize.height.toFloat().coerceAtLeast(1f)
-                val rel = ((spot.y + spot.h / 2f) / vpH - 0.5f).coerceIn(-0.6f, 0.6f)
-                translationX = fanFrom.x * (1f - f)
-                translationY = fanFrom.y * (1f - f) - v * rel * spread * 2f
+                // линза: место и размер кадра — от его положения на экране (читается при отрисовке, без рекомпозиций)
+                val vp = ctl.grid.layoutInfo.viewportSize
+                Lens.pose(spot.x + spot.w / 2f, spot.y + spot.h / 2f, vp.width.toFloat(), vp.height.toFloat(), ctl.lensNow(), pose)
+                translationX = fanFrom.x * (1f - f) + pose[Lens.TX]
+                translationY = fanFrom.y * (1f - f) + pose[Lens.TY]
                 rotationZ = (1f - f) * (if (order % 2 == 0) 7f else -7f)
-                // ряды расходятся меньше, чем тянется кадр, — полотно не рвётся, кадры чуть наползают друг на друга
-                val k = lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
-                scaleX = k.coerceAtLeast(0f)
-                scaleY = (k * (1f + 0.09f * av)).coerceAtLeast(0f)
+                val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
+                scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
                 alpha = if (hidden) 0f else f.coerceIn(0f, 1f)
             }
     ) {
@@ -524,7 +528,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         Spacer(
             Modifier.fillMaxSize().drawBehind {
                 val inset = if (stackDepth > 0f) 3.dp.toPx() else 0f
-                val r = (radius.toPx() + LiftRadius.toPx() * pick).coerceAtLeast(0f)
+                val r = (radius.toPx() + LiftRadius.toPx() * pick + lensRadius * ctl.lensNow()).coerceAtLeast(0f)
                 if (inset > 0f) {
                     // края стопки: два листа под обложкой, видны над ней
                     drawSheet(Rect(inset * 2.2f, 0f, size.width - inset * 2.2f, size.height - inset * 2), r, p.muted.copy(alpha = 0.22f))
@@ -541,11 +545,16 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 }
                 if (b != null && shown > 0f) clipPath(androidx.compose.ui.graphics.Path().apply { addOutline(squircleOutline(area.left, area.top, area.right, area.bottom, r)) }) {
                     drawCover(b, area, shown)
+                    // к краям линзы кадр уходит в тень (цвет фона): взгляд держится в центре
+                    // на светлой теме тень — это белая дымка: делаем её слабее, иначе края выглядят выцветшими
+                    val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
+                    if (sh > 0.01f) drawRect(p.page, alpha = sh)
                 }
             }
         )
         if (item.video && cols <= 5) VideoBadge(item.durationMs)
         if (c.entry.stacked && !c.inStack && cols <= 8) StackBadge(s, ctl, c)
+        if (c.label != null) PeriodLabel(c.label, levelOf(cols))
         if (pick > 0.01f) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(22.dp).graphicsLayer {
             val k = pick.coerceAtLeast(0f); scaleX = k; scaleY = k; alpha = pick.coerceIn(0f, 1f)
         }.clip(CircleShape).background(p.accent), contentAlignment = Alignment.Center) {
@@ -838,4 +847,20 @@ private fun DrawScope.drawDust(b: ImageBitmap, dust: IntArray?, area: Rect, t: F
         if (a <= 0.01f) continue
         drawCircle(Color(cols[j * n + i]), r, Offset(x, y), alpha = a)
     }
+}
+
+
+/**
+ * Подпись месяца или года лежит на первом кадре периода, поверх фото (как в Фото Apple), — сетка остаётся
+ * сплошной. Подпись шире кадра — свободно заходит на соседние.
+ */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.PeriodLabel(label: String, level: Level) {
+    Text(
+        label, color = Color.White, maxLines = 1, softWrap = false,
+        fontSize = if (level == Level.YEARS) 22.sp else 15.sp, fontWeight = FontWeight.Bold, fontFamily = UiFont,
+        style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color(0x99000000), Offset(0f, 1f), 8f)),
+        modifier = Modifier.align(Alignment.TopStart).wrapContentWidth(Alignment.Start, unbounded = true)
+            .padding(start = 6.dp, top = 4.dp),
+    )
 }
