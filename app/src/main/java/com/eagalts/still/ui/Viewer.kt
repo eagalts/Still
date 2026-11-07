@@ -73,6 +73,11 @@ import com.eagalts.still.media.MediaItem
 import com.eagalts.still.t
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.max
@@ -112,6 +117,8 @@ fun Viewer(s: Still, ctl: FeedController) {
     var dismissing by remember(v) { mutableStateOf(false) }
     var chrome by remember(v) { mutableStateOf(true) }
     var zoomed by remember(v) { mutableStateOf(false) }
+    // подробности: свайп вверх — кадр уезжает вверх, снизу выезжает панель (0 — закрыта, 1 — открыта)
+    val info = remember(v) { Animatable(0f) }
 
     // один плеер на весь просмотр: создаётся при открытии, освобождается при закрытии
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -159,11 +166,12 @@ fun Viewer(s: Still, ctl: FeedController) {
             if (v.external) s.onExternalClosed()
         }
     }
-    BackHandler { close() }
+    BackHandler { if (info.value > 0.01f) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else close() }
 
     BoxWithConstraints(Modifier.fillMaxSize().testTag("viewer")) {
         val box = with(density) { Size(maxWidth.toPx(), maxHeight.toPx()) }
         val h = box.height
+        val panelH = with(density) { 330.dp.toPx() + WindowInsets.navigationBars.getBottom(this).toFloat() }.coerceAtMost(h * 0.5f)
         val pull = (drag.value.y / (h * 0.6f)).coerceIn(0f, 1f)
         val f = flight.value
         // фон — не чёрный, а свечение самого кадра; тянешь вниз — проступает лента
@@ -200,16 +208,25 @@ fun Viewer(s: Still, ctl: FeedController) {
 
         HorizontalPager(
             state = pager,
-            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (inFlight) 0f else 1f },
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                alpha = if (inFlight) 0f else 1f
+                translationY = -info.value.coerceIn(0f, 1.1f) * panelH * 0.62f
+            },
             pageSpacing = 16.dp,
-            userScrollEnabled = !zoomed && !dismissing,
+            userScrollEnabled = !zoomed && !dismissing && info.value < 0.01f,
             key = { v.items[it].id },
             beyondViewportPageCount = 1,
         ) { page ->
             val it = v.items[page]
             Page(
                 s, it, box, pb, active = page == pager.settledPage && !inFlight,
-                onTap = { chrome = !chrome },
+                onTap = { if (info.value > 0.01f) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else chrome = !chrome },
+                infoOpen = { info.value > 0.01f },
+                onInfoDrag = { dy -> scope.launch { info.snapTo((info.value - dy / panelH).coerceIn(0f, 1.15f)) } },
+                onInfoEnd = { vy ->
+                    val open = if (abs(vy) > 900f) vy < 0 else info.value > 0.35f
+                    scope.launch { info.animateTo(if (open) 1f else 0f, spring(0.82f, 380f)) }
+                },
                 onZoom = { z -> if (page == pager.currentPage) zoomed = z },
                 onDrag = { d ->
                     dismissing = true
@@ -224,8 +241,9 @@ fun Viewer(s: Still, ctl: FeedController) {
             )
         }
 
-        val ui by animateFloatAsState(if (chrome && !dismissing && !closing && f > 0.98f) 1f else 0f, tween(180), label = "chrome")
+        val ui by animateFloatAsState(if (chrome && !dismissing && !closing && f > 0.98f && info.value < 0.05f) 1f else 0f, tween(180), label = "chrome")
         if (ui > 0.001f) Chrome(s, item, v.fromFilter != null, ui, pb, onShowInFeed = { s.showInFeed(item) })
+        if (info.value > 0.001f) InfoPanel(s, item, panelH, info.value)
     }
 }
 
@@ -301,6 +319,7 @@ private fun rememberLarge(s: Still, item: MediaItem): ImageBitmap? {
 @Composable
 private fun Page(
     s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean,
+    infoOpen: () -> Boolean, onInfoDrag: (Float) -> Unit, onInfoEnd: (Float) -> Unit,
     onTap: () -> Unit, onZoom: (Boolean) -> Unit, onDrag: (Offset) -> Unit, onDragEnd: (Float) -> Unit,
 ) {
     val density = LocalDensity.current
@@ -313,6 +332,16 @@ private fun Page(
     }
     val scale = remember { Animatable(1f) }
     val pan = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    // резкость при зуме: пальцы остановились — видимая часть догружается из оригинала в полном разрешении
+    var region by remember(item.id) { mutableStateOf<Pair<ImageBitmap, Rect>?>(null) }
+    LaunchedEffect(item.id, active) {
+        if (!active || item.video || item.orientation != 0 || item.width <= 0) { region = null; return@LaunchedEffect }
+        snapshotFlow { scale.value to pan.value }.collectLatest { (k, pn) ->
+            if (k < 1.8f) { region = null; return@collectLatest }
+            kotlinx.coroutines.delay(180)
+            region = withContext(Dispatchers.IO) { decodeRegion(s, item, box, fit(item.width, item.height, box), k, pn) }
+        }
+    }
     val rect = fit(item.width, item.height, box)
     val view = LocalView.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -354,7 +383,7 @@ private fun Page(
             val slop = viewConfiguration.touchSlop
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                var mode = 0 // 0 — решаем, 1 — смахивание, 2 — листание (не наше), 3 — зум/сдвиг
+                var mode = 0 // 0 — решаем, 1 — смахивание, 2 — листание (не наше), 3 — зум/сдвиг, 4 — подробности
                 var total = Offset.Zero
                 var lastSpan = 0f
                 var tapCandidate = true
@@ -365,6 +394,7 @@ private fun Page(
                     val pressed = ev.changes.filter { it.pressed }
                     if (pressed.isEmpty()) {
                         if (mode == 1) onDragEnd(vy)
+                        if (mode == 4) onInfoEnd(vy)
                         if (mode == 3 && scale.value < 1f) scope.launch {
                             launch { scale.animateTo(1f, spring(0.8f, 500f)) }
                             pan.animateTo(Offset.Zero, spring(0.8f, 500f))
@@ -427,10 +457,19 @@ private fun Page(
                     }
                     when (mode) {
                         0 -> if (total.getDistance() > slop) {
-                            mode = if (abs(total.y) > abs(total.x) * 1.2f && total.y > 0) 1 else 2
+                            val vertical = abs(total.y) > abs(total.x) * 1.2f
+                            mode = when {
+                                // открыты подробности — вертикаль двигает панель (и вниз тоже: закрыть)
+                                vertical && infoOpen() -> 4
+                                vertical && total.y < 0 -> 4
+                                vertical -> 1
+                                else -> 2
+                            }
                             if (mode == 1) { ch.consume(); onDrag(total) }
+                            if (mode == 4) { ch.consume(); onInfoDrag(total.y) }
                         }
                         1 -> { ch.consume(); onDrag(d) }
+                        4 -> { ch.consume(); onInfoDrag(d.y) }
                         2 -> {}
                     }
                     if (mode == 2) break
@@ -445,6 +484,15 @@ private fun Page(
         }) {
             val b = full ?: thumb ?: return@Canvas
             drawCover(b, rect)
+            region?.let { (bmp, src) ->
+                val dx = rect.left + src.left / item.width * rect.width; val dy = rect.top + src.top / item.height * rect.height
+                val dw = src.width / item.width * rect.width; val dh = src.height / item.height * rect.height
+                drawImage(
+                    bmp, dstOffset = androidx.compose.ui.unit.IntOffset(dx.toInt(), dy.toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize(dw.toInt().coerceAtLeast(1), dh.toInt().coerceAtLeast(1)),
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+                )
+            }
         }
         // видео и ожившее фото — поверх кадра, в его же рамке; появляются с первым кадром (без чёрной вспышки)
         val mine = pb.owner == item.id && active
@@ -619,3 +667,86 @@ private fun ChromeButton(icon: androidx.compose.ui.graphics.vector.ImageVector, 
     }
 }
 
+
+
+/**
+ * Видимая при зуме часть кадра — из оригинала, с прореживанием ровно до разрешения экрана (не больше):
+ * памяти — на один экран, сколько ни приближай.
+ */
+private fun decodeRegion(s: Still, item: MediaItem, box: Size, rect: Rect, k: Float, pan: Offset): Pair<ImageBitmap, Rect>? = runCatching {
+    val ctx = s.ctx ?: return null
+    val dispW = rect.width * k; val dispH = rect.height * k
+    val left = box.width / 2f + pan.x - dispW / 2f; val top = box.height / 2f + pan.y - dispH / 2f
+    val vl = maxOf(0f, left); val vt = maxOf(0f, top)
+    val vr = minOf(box.width, left + dispW); val vb = minOf(box.height, top + dispH)
+    if (vr <= vl || vb <= vt) return null
+    val iw = item.width.toFloat(); val ih = item.height.toFloat()
+    // запас по краям — сдвиг пальцем на чуть-чуть не оголяет мыло
+    val mx = (vr - vl) * 0.1f; val my = (vb - vt) * 0.1f
+    val sl = (((vl - mx) - left) / dispW * iw).coerceIn(0f, iw); val st = (((vt - my) - top) / dispH * ih).coerceIn(0f, ih)
+    val sr = (((vr + mx) - left) / dispW * iw).coerceIn(0f, iw); val sb = (((vb + my) - top) / dispH * ih).coerceIn(0f, ih)
+    var sample = 1
+    while ((sr - sl) / (sample * 2) >= (vr - vl) * 1.0f) sample *= 2
+    val bmp = ctx.contentResolver.openInputStream(s.lib.uri(item))?.use { input ->
+        val dec = if (android.os.Build.VERSION.SDK_INT >= 31) android.graphics.BitmapRegionDecoder.newInstance(input)
+        else @Suppress("DEPRECATION") android.graphics.BitmapRegionDecoder.newInstance(input, false)
+        try {
+            dec?.decodeRegion(android.graphics.Rect(sl.toInt(), st.toInt(), sr.toInt(), sb.toInt()),
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        } finally { dec?.recycle() }
+    } ?: return null
+    bmp.asImageBitmap() to Rect(sl, st, sr, sb)
+}.getOrNull()
+
+/**
+ * Подробности кадра: выезжают снизу стеклом, кадр уезжает вверх. Дата, камера и съёмка, файл, место —
+ * всё, что записано в самом файле, без сети.
+ */
+@Composable
+private fun InfoPanel(s: Still, item: MediaItem, height: Float, open: Float) {
+    val density = LocalDensity.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val d by produceState<com.eagalts.still.media.Details?>(null, item.id) {
+        value = withContext(Dispatchers.IO) { com.eagalts.still.media.DetailsLoader.load(ctx, item, s.lib.uri(item)) }
+    }
+    val hDp = with(density) { height.toDp() }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            Modifier.fillMaxWidth().height(hDp).testTag("info-panel")
+                .graphicsLayer { translationY = (1f - open.coerceIn(0f, 1.15f)) * height }
+                .clip(SquircleShape(Radius.xl, Radius.xl, 0.dp, 0.dp)).background(Color(0xF2141318))
+                .navigationBarsPadding().padding(horizontal = 22.dp, vertical = 20.dp),
+        ) {
+            Text(Dates.full(item.taken), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
+            Spacer(Modifier.height(14.dp))
+            val x = d
+            Column(Modifier.fillMaxWidth().clip(SquircleShape(Radius.m)).background(Color(0x14FFFFFF)).padding(16.dp)) {
+                Text(x?.camera ?: if (item.video) t("Видео") else t("Без данных камеры"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
+                if (x?.lens != null) Text(x.lens, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontFamily = UiFont, modifier = Modifier.padding(top = 2.dp))
+                val shot = listOfNotNull(
+                    x?.fNumber?.let { "ƒ/" + "%.1f".format(it) },
+                    x?.exposure?.let { t("{0} с", com.eagalts.still.media.DetailsLoader.shutter(it)) },
+                    x?.iso?.let { "ISO $it" },
+                    x?.focal?.let { t("{0} мм", it) },
+                )
+                if (shot.isNotEmpty()) Text(shot.joinToString("   "), color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontFamily = UiFont, modifier = Modifier.padding(top = 10.dp))
+                val mp = item.width.toLong() * item.height / 1_000_000.0
+                val file = listOfNotNull(
+                    x?.name,
+                    if (item.video) "${item.width}×${item.height}" else t("{0} МП", "%.0f".format(mp)) + " · ${item.width}×${item.height}",
+                    t("{0} МБ", "%.1f".format(item.size / 1_048_576.0)),
+                    if (item.video) clock(item.durationMs).removePrefix("−") else null,
+                )
+                Text(file.joinToString(" · "), color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontFamily = UiFont, modifier = Modifier.padding(top = 10.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            val place = x?.let { if (it.lat != null && it.lon != null) com.eagalts.still.media.DetailsLoader.coords(it.lat, it.lon, t("с. ш.") to t("ю. ш."), t("в. д.") to t("з. д.")) else null }
+            Row(Modifier.fillMaxWidth().clip(SquircleShape(Radius.m)).background(Color(0x14FFFFFF)).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(place ?: t("Место не записано"), color = Color.White.copy(alpha = if (place != null) 1f else 0.6f), fontSize = 14.sp, fontFamily = UiFont)
+                    if (item.bucket.isNotEmpty()) Text(item.bucket, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontFamily = UiFont, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+        }
+    }
+}

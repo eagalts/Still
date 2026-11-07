@@ -23,6 +23,8 @@ class MediaItem(
     val favorite: Boolean = false,
     /** Открыт из другого приложения: свой адрес, в MediaStore его может и не быть. */
     val external: android.net.Uri? = null,
+    /** Поворот из EXIF (0/90/180/270). [width]/[height] — уже с ним, как кадр виден. */
+    val orientation: Int = 0,
 ) {
     val temporary: Boolean get() = source != Source.CAMERA
     override fun equals(other: Any?) = other is MediaItem && other.id == id

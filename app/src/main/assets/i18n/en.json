@@ -43,5 +43,15 @@
  "Удалять без лишних вопросов": "Delete without extra prompts",
  "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android asks you to confirm every deletion. Let Still manage media — it's a one-time setting. Photos still go to the trash for 30 days.",
  "Разрешить": "Allow",
- "Не сейчас": "Not now"
+ "Не сейчас": "Not now",
+ "Без данных камеры": "No camera data",
+ "{0} с": "{0} s",
+ "{0} мм": "{0} mm",
+ "{0} МП": "{0} MP",
+ "{0} МБ": "{0} MB",
+ "с. ш.": "N",
+ "ю. ш.": "S",
+ "в. д.": "E",
+ "з. д.": "W",
+ "Место не записано": "No location recorded"
 }

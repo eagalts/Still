@@ -349,6 +349,21 @@ class FeedUiTest {
         rule.onNodeWithTag("video-bar").assertExists()
     }
 
+    /** Свайп вверх по фото — снизу выезжают подробности; вниз — закрываются, просмотр остаётся. */
+    @Test fun swipeUpShowsDetails() {
+        show()
+        rule.onNodeWithTag("tile-300").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        rule.onNodeWithTag("viewer").performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width / 2f, height * 0.6f), androidx.compose.ui.geometry.Offset(width / 2f, height * 0.25f), 250) }
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        rule.onNodeWithTag("info-panel").assertExists()
+        shot("info")
+        rule.onNodeWithTag("viewer").performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width / 2f, height * 0.3f), androidx.compose.ui.geometry.Offset(width / 2f, height * 0.7f), 250) }
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        rule.onNodeWithTag("info-panel").assertDoesNotExist()
+        assertTrue("закрылся сам просмотр", still.viewing != null)
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

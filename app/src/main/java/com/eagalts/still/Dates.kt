@@ -28,10 +28,14 @@ object Dates {
         return fmt("LLLL", ms).replaceFirstChar { it.titlecase(locale) } + " " + c.get(Calendar.YEAR)
     }
 
-    /** Время в просмотре: «5 ноября 2024, 18:42». */
-    fun moment(ms: Long): String = fmt("dMMMMyHHmm", ms)
+    /** Заголовок подробностей: «Суббота, 7 ноября 2026 · 05:41» — без «г.», которое ICU ставит в русском. */
+    fun full(ms: Long): String = (fmt("EEEEdMMMM", ms) + " " + year(ms)).replaceFirstChar { it.titlecase(locale) } + " · " + fmt("HHmm", ms)
 
-    // ICU, а не java.text: шаблоны Android для русского содержат «cccc» (день недели отдельно), java.text на них падает
+    /** Время над фото: «6 ноября 2026, 10:15». */
+    fun moment(ms: Long): String = fmt("dMMMM", ms) + " " + year(ms) + ", " + fmt("HHmm", ms)
+
+    private fun year(ms: Long) = Calendar.getInstance().apply { timeInMillis = ms }.get(Calendar.YEAR)
+
     private fun fmt(skeleton: String, ms: Long): String =
         android.icu.text.SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(Date(ms))
 }

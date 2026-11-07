@@ -44,6 +44,7 @@ class MediaStoreLibrary(ctx: Context) : Library {
             add(MediaStore.MediaColumns.MIME_TYPE); add(MediaStore.MediaColumns.WIDTH); add(MediaStore.MediaColumns.HEIGHT)
             add(MediaStore.MediaColumns.SIZE); add(MediaStore.MediaColumns.DURATION)
             if (Build.VERSION.SDK_INT >= 30) add(MediaStore.MediaColumns.IS_FAVORITE)
+            add(MediaStore.MediaColumns.ORIENTATION)
         }.toTypedArray()
         val sel = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}," +
             "${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
@@ -66,6 +67,7 @@ class MediaStoreLibrary(ctx: Context) : Library {
             val iH = c.getColumnIndexOrThrow(cols[10]); val iSize = c.getColumnIndexOrThrow(cols[11])
             val iDur = c.getColumnIndexOrThrow(cols[12])
             val iFav = if (Build.VERSION.SDK_INT >= 30) c.getColumnIndexOrThrow(cols[13]) else -1
+            val iRot = c.getColumnIndex(MediaStore.MediaColumns.ORIENTATION)
             out.ensureCapacity(c.count)
             while (c.moveToNext()) {
                 val added = c.getLong(iAdded) * 1000
@@ -78,7 +80,11 @@ class MediaStoreLibrary(ctx: Context) : Library {
                     source = Classify.source(c.getString(iPath), bucket, c.getString(iOwner)),
                     bucketId = c.getLong(iBid), bucket = bucket,
                     mime = c.getString(iMime) ?: "",
-                    width = c.getInt(iW), height = c.getInt(iH), size = c.getLong(iSize),
+                    // MediaStore даёт размер сохранённых пикселей; повёрнутый кадр на экране — с переставленными сторонами
+                    width = if (rot(c, iRot) % 180 == 0) c.getInt(iW) else c.getInt(iH),
+                    height = if (rot(c, iRot) % 180 == 0) c.getInt(iH) else c.getInt(iW),
+                    orientation = rot(c, iRot),
+                    size = c.getLong(iSize),
                     durationMs = c.getLong(iDur),
                     favorite = iFav >= 0 && c.getInt(iFav) == 1,
                 )
@@ -86,6 +92,8 @@ class MediaStoreLibrary(ctx: Context) : Library {
         }
         return out
     }
+
+    private fun rot(c: android.database.Cursor, i: Int) = if (i >= 0 && !c.isNull(i)) ((c.getInt(i) % 360) + 360) % 360 else 0
 
     override fun uri(it: MediaItem): Uri = it.external ?: ContentUris.withAppendedId(
         if (it.video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it.id

@@ -43,5 +43,15 @@
  "Удалять без лишних вопросов": "Eliminar sin preguntas",
  "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android pide confirmar cada eliminación. Permite que Still gestione el contenido multimedia: es un ajuste único. Las fotos siguen yendo a la papelera durante 30 días.",
  "Разрешить": "Permitir",
- "Не сейчас": "Ahora no"
+ "Не сейчас": "Ahora no",
+ "Без данных камеры": "Sin datos de cámara",
+ "{0} с": "{0} s",
+ "{0} мм": "{0} mm",
+ "{0} МП": "{0} MP",
+ "{0} МБ": "{0} MB",
+ "с. ш.": "N",
+ "ю. ш.": "S",
+ "в. д.": "E",
+ "з. д.": "O",
+ "Место не записано": "Sin ubicación"
 }

@@ -145,6 +145,13 @@ class RulesTest {
         assertEquals(null, com.eagalts.still.media.Motion.videoLength(null))
     }
 
+    @Test fun detailsFormatting() {
+        assertEquals(55.7558 to 37.6173, com.eagalts.still.media.DetailsLoader.parseIso6709("+55.7558+037.6173/"))
+        assertEquals(-33.8688 to 151.2093, com.eagalts.still.media.DetailsLoader.parseIso6709("-33.8688+151.2093+012.000/"))
+        assertEquals("1/120", com.eagalts.still.media.DetailsLoader.shutter(1.0 / 120))
+        assertEquals("2", com.eagalts.still.media.DetailsLoader.shutter(2.0))
+    }
+
     @Test fun crashTextHasNoPaths() {
         val s = CrashReporter.scrub("java.io.FileNotFoundException: /storage/emulated/0/DCIM/Camera/PXL_1.jpg (content://media/external/images/1)")
         assertFalse("/storage" in s || "PXL" in s || "media/external" in s)
@@ -163,7 +170,7 @@ class DatesTest {
                 for (lv in Level.entries) for (d in listOf(0L, 3L, 400L)) {
                     if (lv != Level.NONE) assertTrue(Dates.label(now - d * Ephemeral.DAY, lv).isNotBlank())
                 }
-                assertTrue(Dates.scrub(now).isNotBlank() && Dates.moment(now).isNotBlank())
+                assertTrue(Dates.scrub(now).isNotBlank() && Dates.moment(now).isNotBlank() && Dates.full(now).isNotBlank())
             }
         } finally { java.util.Locale.setDefault(saved) }
     }
