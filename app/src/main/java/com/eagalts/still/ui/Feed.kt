@@ -124,6 +124,8 @@ class FeedController(val grid: LazyGridState) {
     var cols = 3
     /** Где на экране была стопка, которую открыли: из неё вылетают кадры и в неё же складываются. */
     var stackFrom: Rect? = null
+    /** Насколько открыта стопка (0…1): лента под ней уходит вглубь и в размытие ровно в такт. */
+    var stackVeil by androidx.compose.runtime.mutableFloatStateOf(0f)
     /**
      * Пока открыта стопка, кадры просмотра вылетают из её сетки и возвращаются в неё, а не в ленту:
      * [overlayBounds] — где кадр в сетке стопки, [overlayReveal] — докрутить к нему.
@@ -605,7 +607,8 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
                 // открытая стопка остаётся лежать — из неё вынут только верхний снимок (см. drawPile)
-                alpha = if (hidden || (opened && !stacked)) 0f else 1f
+                // открытая стопка: на её месте растёт сетка её кадров — сама стопка растворяется и проявляется обратно
+                alpha = if (hidden) 0f else if (opened) (1f - ctl.stackVeil * 3f).coerceIn(0f, 1f) else 1f
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
                 // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
@@ -626,7 +629,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         if (stacked && !leaving) Spacer(
             Modifier.fillMaxSize().drawBehind {
                 val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
-                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh, coverOut = opened)
+                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh)
             }
         ) else Spacer(
             Modifier.fillMaxSize().drawBehind {

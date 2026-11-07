@@ -71,11 +71,16 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedCon
                     }
                     Box(Modifier.fillMaxSize()) {
                         // под шторкой лента уходит в размытие — шторка становится стеклом над твоими фото
-                        val blur by androidx.compose.animation.core.animateFloatAsState(
-                            if (s.sheet || s.stack != null) 1f else 0f, fineSpring(1f, 300f), label = "blur",
+                        val sheetBlur by androidx.compose.animation.core.animateFloatAsState(
+                            if (s.sheet) 1f else 0f, fineSpring(1f, 300f), label = "blur",
                         )
                         Box(Modifier.fillMaxSize().graphicsLayer {
-                            val r = 28.dp.toPx() * blur.coerceIn(0f, 1f)
+                            // открытая стопка ведёт ленту сама, кадр в кадр со своим полётом: лента отступает вглубь
+                            // (чуть меньше и размыта) и возвращается ровно тогда, когда стопка сложилась
+                            val veil = ctl.stackVeil.coerceIn(0f, 1f)
+                            val k = 1f - 0.06f * veil
+                            scaleX = k; scaleY = k
+                            val r = 28.dp.toPx() * maxOf(sheetBlur.coerceIn(0f, 1f), veil)
                             if (android.os.Build.VERSION.SDK_INT >= 31 && r > 0.5f)
                                 renderEffect = androidx.compose.ui.graphics.BlurEffect(r, r, androidx.compose.ui.graphics.TileMode.Clamp)
                         }) {

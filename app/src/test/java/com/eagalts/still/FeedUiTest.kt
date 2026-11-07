@@ -552,22 +552,25 @@ class FeedUiTest {
     }
 
     /**
-     * Открытая стопка остаётся лежать в ленте — вынут только верхний снимок (он в сетке стопки): нижние карточки
-     * видны в центре плитки. Раньше пропадала вся плитка, и при закрытии стопка выскакивала на место рывком.
+     * Стопка закрылась — лента сразу та же, что до открытия: не уменьшена, не притушена, стопка на месте. Раньше
+     * размытие уходило уже после того, как снимок сел на место, и он на миг становился мутным.
      */
-    @Test fun openStackStaysInFeedWithoutItsTopPhoto() {
+    @Test fun closingStackReturnsFeedInSameFrame() {
         show()
+        val before = shot("stack-before")
         val pile = rule.runOnIdle { ctl.bounds(103) }!!
         rule.onNodeWithTag("tile-103").performClick()
-        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
-        val b = shot("stack-open-feed")
-        // центр плитки стопки: под полупрозрачным фоном папки — нижние карточки, а не пустой фон
-        val bg = com.eagalts.still.ui.LightPalette.page
-        val px = b.getPixel(pile.center.x.toInt(), pile.center.y.toInt())
-        val d = kotlin.math.abs(android.graphics.Color.red(px) - (bg.red * 255).toInt()) +
-            kotlin.math.abs(android.graphics.Color.green(px) - (bg.green * 255).toInt()) +
-            kotlin.math.abs(android.graphics.Color.blue(px) - (bg.blue * 255).toInt())
-        assertTrue("стопка пропала из ленты целиком (разница с фоном $d)", d > 30)
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        assertTrue("лента под стопкой не ушла вглубь", ctl.stackVeil > 0.99f)
+        rule.mainClock.autoAdvance = false
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        var frames = 0
+        while (still.stack != null) { rule.mainClock.advanceTimeBy(16); frames++; check(frames < 200) }
+        assertEquals("лента ещё притушена в кадре, где стопка закрылась", 0f, ctl.stackVeil, 0.001f)
+        val after = shot("stack-after", settle = false)
+        val c = pile.center
+        assertEquals("стопка в ленте не вернулась на место", before.getPixel(c.x.toInt(), c.y.toInt()), after.getPixel(c.x.toInt(), c.y.toInt()))
+        rule.mainClock.autoAdvance = true
     }
 
     /**
