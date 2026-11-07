@@ -115,7 +115,7 @@ private fun SelectionBar(s: Still, ctl: FeedController) {
     val p = LocalPalette.current
     val trash = s.filter == Filter.Trash
     val items = remember(s.selection) { s.selected() }
-    val temporary = remember(items) { items.any { Ephemeral.daysLeft(it, System.currentTimeMillis(), s.index.keptIds()) != null } }
+    val temporary = remember(items) { items.any { s.left(it) != null } }
     Row(
         Modifier.padding(horizontal = 16.dp).fillMaxWidth().glass(RoundedCornerShape(50), p, ctl.ambient)
             .padding(horizontal = 6.dp, vertical = 4.dp),

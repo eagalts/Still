@@ -18,6 +18,7 @@ import com.eagalts.still.media.Moments
 import com.eagalts.still.media.Thumbs
 import com.eagalts.still.media.Embedder
 import com.eagalts.still.media.Vectors
+import com.eagalts.still.media.Paperwork
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,6 +82,8 @@ class Still(
     val vectors: Vectors = Vectors(null),
     /** Модель для векторов; null — стопки только из уже посчитанного (тесты, модель не открылась). */
     private val embedder: (() -> Embedder)? = null,
+    /** «Это бумага?» поверх векторов; null — бумаги не ищем. */
+    private val paperwork: (() -> Paperwork?)? = null,
 ) {
     val thumbs = Thumbs(ctx, lib, index, vectors)
     private val screenWidthDp: Float = (ctx?.resources?.configuration?.screenWidthDp ?: 412).toFloat()
@@ -98,6 +101,20 @@ class Still(
     var feed by mutableStateOf(Feed(emptyList(), 3, 0)); private set
     /** Сколько столбцов просили (раскладка под них может ещё строиться). */
     var columns by mutableIntStateOf(3); private set
+    /** Через сколько временное (скриншоты, мессенджеры, бумаги) уходит в «Поток», мс — ползунок в «Потоке». */
+    var flowTtl by androidx.compose.runtime.mutableLongStateOf(
+        ctx?.getSharedPreferences("still", Context.MODE_PRIVATE)?.getLong("flowTtl", Ephemeral.DEFAULT) ?: Ephemeral.DEFAULT
+    ); private set
+    /** Кадры камеры, которые признаны бумагами (по стопкам), — уходят в «Поток» вместе с временным. */
+    @Volatile var paper: Set<Long> = emptySet(); private set
+
+    fun changeFlowTtl(ms: Long) {
+        if (ms == flowTtl) return
+        flowTtl = ms
+        prefs?.edit()?.putLong("flowTtl", ms)?.apply()
+        rebuild()
+    }
+
     /** Открытая стопка — поверх ленты, как папка. */
     var stack: Entry? by mutableStateOf(null); private set
 
@@ -167,10 +184,11 @@ class Still(
         if (todo.isEmpty()) return
         printJob = scope.launch {
             val model = embedder?.invoke()
+            val papers = paperwork?.let { withContext(Dispatchers.IO) { it() } }
             try {
                 // пересборка — после первой порции (видимое внизу складывается сразу), дальше реже и в конце
                 todo.chunked(150).forEachIndexed { i, chunk ->
-                    chunk.forEach { runCatching { thumbs.printInBackground(it, model) } }
+                    chunk.forEach { runCatching { thumbs.printInBackground(it, model, papers) } }
                     if (i == 0 || i % 15 == 14) { printVersion++; rebuild() }
                 }
             } finally {
@@ -181,26 +199,29 @@ class Still(
     }
 
     fun rebuild() {
-        val f = filter; val items = all; val kept = index.keptIds(); val cols = columns
+        val f = filter; val items = all; val kept = index.keptIds(); val cols = columns; val ttl = flowTtl
         val t = now()
         rebuildJob?.cancel()
         rebuildJob = scope.launch {
-            val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, t) }
+            val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, t, ttl) }
             feed = Feed(built, cols, feed.gen + 1)
             refreshStack(built)
         }
     }
 
     internal fun buildCells(
-        f: Filter?, items: List<MediaItem>, trash: List<MediaItem>, kept: Set<Long>, cols: Int, t: Long,
+        f: Filter?, items: List<MediaItem>, trash: List<MediaItem>, kept: Set<Long>, cols: Int, t: Long, ttl: Long = flowTtl,
     ): List<Cell> {
         // стопки от числа столбцов не зависят: смена ступени пересчитывает только подписи, а не склейку всей ленты
-        val key = listOf(f, System.identityHashCode(items), System.identityHashCode(trash), kept, printVersion, t / Ephemeral.DAY)
+        val key = listOf(f, System.identityHashCode(items), System.identityHashCode(trash), kept, printVersion, t / Ephemeral.HOUR, ttl)
         val cached = entryCache
         val entries = if (cached != null && cached.first == key) cached.second else {
+        // бумаги — по стопкам всех кадров (одиночная бумага — по себе), до того как лента решит, что в ней остаётся
+        val pp = Paperwork.flowIds(Moments.build(items, vectors::get, sceneCache), vectors::paper)
+        paper = pp
         val base = when (f) {
-            null -> items.filter { Ephemeral.inFeed(it, t, kept) }
-            Filter.Flow -> items.filter { it.temporary }
+            null -> items.filter { Ephemeral.inFeed(it, t, kept, ttl, pp) }
+            Filter.Flow -> items.filter { Ephemeral.temporary(it, pp) }
             Filter.Videos -> items.filter { it.video }
             Filter.Screens -> items.filter { it.source == Source.SCREENSHOT }
             Filter.Favorites -> items.filter { it.favorite }
@@ -313,7 +334,7 @@ class Still(
         .sortedByDescending { it.second.taken }
 
     fun counts() = mapOf(
-        Filter.Flow to all.count { it.temporary },
+        Filter.Flow to all.count { Ephemeral.temporary(it, paper) },
         Filter.Videos to all.count { it.video },
         Filter.Screens to all.count { it.source == Source.SCREENSHOT },
         Filter.Favorites to all.count { it.favorite },
@@ -329,14 +350,15 @@ class Still(
     /** Правило 6: из поиска или альбома — в ленту, на то место во времени, где кадр лежит. */
     fun showInFeed(item: MediaItem) {
         viewing = null
-        if (!Ephemeral.inFeed(item, now(), index.keptIds())) {
+        if (!Ephemeral.inFeed(item, now(), index.keptIds(), flowTtl, paper)) {
             // кадр уже ушёл в «Поток» — показываем его там
             open(Filter.Flow)
         } else open(null)
         reveal = item.id
     }
 
-    fun daysLeft(item: MediaItem) = Ephemeral.daysLeft(item, now(), index.keptIds())
+    /** Сколько кадру осталось в ленте, мс; null — не уходит. */
+    fun left(item: MediaItem) = Ephemeral.left(item, now(), index.keptIds(), flowTtl, paper)
 
     fun keep(ids: Collection<Long>) {
         index.keep(ids)

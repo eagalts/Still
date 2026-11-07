@@ -39,18 +39,55 @@ class RulesTest {
         assertEquals(Source.OTHER, Classify.source("Pictures/Edits/", "Edits", null))
     }
 
-    @Test fun temporaryLeavesAfterFourteenDays() {
-        val shot = item(1, Source.SCREENSHOT, added = now - 13 * day)
-        val old = item(2, Source.SCREENSHOT, added = now - 15 * day)
+    /** Временное уходит в «Поток» через выбранный срок: по умолчанию 3 дня, ползунком — от часа до трёх месяцев. */
+    @Test fun temporaryLeavesAfterChosenTime() {
+        val shot = item(1, Source.SCREENSHOT, added = now - 2 * day)
+        val old = item(2, Source.SCREENSHOT, added = now - 4 * day)
         val camera = item(3, added = now - 400 * day)
         assertTrue(Ephemeral.inFeed(shot, now, emptySet()))
         assertFalse(Ephemeral.inFeed(old, now, emptySet()))
         assertTrue(Ephemeral.inFeed(camera, now, emptySet()))
         // оставленное — навсегда
         assertTrue(Ephemeral.inFeed(old, now, setOf(2L)))
-        assertEquals(1, Ephemeral.daysLeft(shot, now, emptySet()))
-        assertEquals(null, Ephemeral.daysLeft(camera, now, emptySet()))
-        assertEquals(null, Ephemeral.daysLeft(old, now, setOf(2L)))
+        assertEquals(day, Ephemeral.left(shot, now, emptySet()))
+        assertEquals(null, Ephemeral.left(camera, now, emptySet()))
+        assertEquals(null, Ephemeral.left(old, now, setOf(2L)))
+        // срок на ползунке: час — скриншот двухчасовой давности уже в «Потоке», три месяца — и старый в ленте
+        val fresh = item(4, Source.SCREENSHOT, added = now - 2 * Ephemeral.HOUR)
+        assertFalse(Ephemeral.inFeed(fresh, now, emptySet(), ttl = Ephemeral.STEPS.first()))
+        assertTrue(Ephemeral.inFeed(old, now, emptySet(), ttl = Ephemeral.STEPS.last()))
+        assertEquals(Ephemeral.DEFAULT, Ephemeral.STEPS[6])
+    }
+
+    /** Бумага с камеры уходит в «Поток», как скриншот; камера без бумаги — нет. */
+    @Test fun paperFromCameraLeavesLikeScreenshots() {
+        val receipt = item(1, added = now - 4 * day); val sunset = item(2, added = now - 4 * day)
+        assertFalse(Ephemeral.inFeed(receipt, now, emptySet(), paper = setOf(1L)))
+        assertTrue(Ephemeral.inFeed(sunset, now, emptySet(), paper = setOf(1L)))
+    }
+
+    /**
+     * Решение «бумага» — по стопке: прогулка в тумане, где два серых кадра из восьми похожи на бумагу, остаётся
+     * в ленте; стопка, где бумаг больше половины, уходит целиком; одиночная бумага — сама.
+     */
+    @Test fun paperIsDecidedPerStack() {
+        val walk = com.eagalts.still.media.Entry(item(1), (1L..8L).map { item(it) })
+        val bills = com.eagalts.still.media.Entry(item(20), (20L..22L).map { item(it) })
+        val single = com.eagalts.still.media.Entry(item(30), listOf(item(30)))
+        val paper = setOf(3L, 5L, 20L, 21L, 30L)
+        val out = com.eagalts.still.media.Paperwork.flowIds(listOf(walk, bills, single)) { it in paper }
+        assertEquals(setOf(20L, 21L, 22L, 30L), out)
+    }
+
+    /** Распознавание бумаг в Kotlin даёт те же оценки, что и обученное (чеки — высоко, обычные фото — низко). */
+    @Test fun paperworkMatchesTraining() {
+        val pw = java.io.File("src/main/assets/paperwork.bin").inputStream().use(com.eagalts.still.media.Paperwork::read)!!
+        val b = java.nio.ByteBuffer.wrap(java.io.File("src/test/resources/paperwork_fixture.bin").readBytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        repeat(b.int) { i ->
+            val v = ByteArray(1024); b.get(v); val want = b.float
+            assertEquals("кадр $i", want, pw.score(v), 0.02f)
+            assertEquals(i < 3, pw.isPaper(v))
+        }
     }
 
     // ——— стопки: выходы по ритму съёмки, сцены по смыслу кадра ———

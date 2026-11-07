@@ -62,18 +62,21 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index, 
 
     /** Нужен ли кадру фоновый проход: отпечаток (фото) или вектор сцены (фото и видео — по кадру-обложке). */
     fun needsWork(item: MediaItem, embedding: Boolean): Boolean =
-        (!item.video && !index.hasPrint(item.id)) || (embedding && vectors?.has(item.id) == false)
+        (!item.video && !index.hasPrint(item.id)) || (embedding && (vectors?.has(item.id) == false || vectors?.paper(item.id) == null))
 
-    suspend fun printInBackground(item: MediaItem, embedder: Embedder? = null) {
+    suspend fun printInBackground(item: MediaItem, embedder: Embedder? = null, paperwork: Paperwork? = null) {
         val needPrint = !item.video && !index.hasPrint(item.id)
         val needVec = embedder != null && vectors?.has(item.id) == false
-        if (!needPrint && !needVec) return
+        // бумага ли — по вектору; вектор уже есть (посчитан раньше) — миниатюра не нужна
+        fun judge() { val vs = vectors ?: return; if (paperwork != null && vs.paper(item.id) == null) vs[item.id]?.let { vs.putPaper(item.id, paperwork.isPaper(it)) } }
+        if (!needPrint && !needVec) { if (paperwork != null) withContext(printPool) { judge() }; return }
         withContext(printPool) {
             // одна миниатюра на всё: 256 — модели нужно 224, отпечатку хватило бы и 160
             val bmp = cancellable { sig -> lib.thumbnail(item, if (needVec) 256 else 160, sig) } ?: return@withContext
             if (needPrint) runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
             if (needVec) embedder?.embed(bmp)?.let { vectors?.put(item.id, it) }
             bmp.recycle()
+            judge()
         }
     }
 

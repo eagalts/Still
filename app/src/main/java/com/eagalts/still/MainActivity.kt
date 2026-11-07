@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.eagalts.still.media.Embedder
 import com.eagalts.still.media.Index
 import com.eagalts.still.media.Vectors
+import com.eagalts.still.media.Paperwork
 import com.eagalts.still.media.MediaItem
 import com.eagalts.still.media.MediaStoreLibrary
 import com.eagalts.still.media.Source
@@ -47,6 +48,7 @@ class MainActivity : ComponentActivity() {
         still = Still(
             this, MediaStoreLibrary(this), Index(File(noBackupFilesDir, "index.bin")), lifecycleScope,
             vectors = Vectors(File(noBackupFilesDir, "scenes.bin")), embedder = { Embedder(applicationContext) },
+            paperwork = { runCatching { assets.open(Paperwork.ASSET).use(Paperwork::read) }.getOrNull() },
         )
         still.lastCrash = CrashReporter.takeLast(this)
         still.onExternalClosed = { finish() }

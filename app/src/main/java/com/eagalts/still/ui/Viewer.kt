@@ -510,7 +510,7 @@ private fun Page(
 /** Немногие элементы просмотра: время сверху, три действия снизу. Тап по фото — прячутся. */
 @Composable
 private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb: Playback, onShowInFeed: () -> Unit) {
-    val left = s.daysLeft(item)
+    val left = s.left(item)
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = a.coerceIn(0f, 1f) }) {
         Column(
             Modifier.fillMaxWidth().background(
@@ -528,7 +528,7 @@ private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb:
             )
             if (left != null) Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (left == 0) t("В Потоке") else t("Уйдёт в Поток через {0} дн.", left),
+                    if (left == 0L) t("В Потоке") else t("Уйдёт в Поток через {0}", flowLeft(left)),
                     color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, fontFamily = UiFont,
                 )
                 Text(

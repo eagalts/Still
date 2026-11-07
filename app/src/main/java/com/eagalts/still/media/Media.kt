@@ -55,21 +55,28 @@ object Classify {
 }
 
 /**
- * Правило 1 — «временное по умолчанию». Камера в ленте навсегда; всё остальное живёт в ленте [TEMP_DAYS] дней
- * с момента появления на телефоне и тихо уходит в «Поток» (не удаляется). Оставленное вручную — навсегда.
+ * Правило 1 — «временное по умолчанию». Снятое камерой живёт в ленте всегда; всё остальное (скриншоты, записи
+ * экрана, мессенджеры, загрузки) и бумаги с камеры ([Paperwork]: квитанции, чеки, счётчики, документы) живут в
+ * ленте [ttl] с момента появления на телефоне и тихо уходят в «Поток» (не удаляются). Срок выбирается ползунком
+ * в «Потоке» — от часа до трёх месяцев, по умолчанию [DEFAULT]. Оставленное вручную — навсегда.
  */
 object Ephemeral {
-    const val TEMP_DAYS = 14
+    const val HOUR = 3_600_000L
     const val DAY = 86_400_000L
+    /** Ступени ползунка: часы, дни, недели, месяцы. */
+    val STEPS = longArrayOf(HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 3 * DAY, 5 * DAY, 7 * DAY, 14 * DAY, 21 * DAY, 30 * DAY, 60 * DAY, 90 * DAY)
+    const val DEFAULT = 3 * DAY
 
-    fun inFeed(it: MediaItem, now: Long, kept: Set<Long>): Boolean =
-        !it.temporary || it.id in kept || now - it.added < TEMP_DAYS * DAY
+    /** Уходит ли кадр в «Поток» со временем: не камера — или бумага с камеры. */
+    fun temporary(it: MediaItem, paper: Set<Long> = emptySet()): Boolean = it.temporary || it.id in paper
 
-    /** Сколько полных дней кадру осталось в ленте; null — он не уходит (камера или оставлен). */
-    fun daysLeft(it: MediaItem, now: Long, kept: Set<Long>): Int? {
-        if (!it.temporary || it.id in kept) return null
-        val left = TEMP_DAYS * DAY - (now - it.added)
-        return if (left <= 0) 0 else ((left + DAY - 1) / DAY).toInt()
+    fun inFeed(it: MediaItem, now: Long, kept: Set<Long>, ttl: Long = DEFAULT, paper: Set<Long> = emptySet()): Boolean =
+        !temporary(it, paper) || it.id in kept || now - it.added < ttl
+
+    /** Сколько кадру осталось в ленте, мс (0 — уже в «Потоке»); null — он не уходит (камера или оставлен). */
+    fun left(it: MediaItem, now: Long, kept: Set<Long>, ttl: Long = DEFAULT, paper: Set<Long> = emptySet()): Long? {
+        if (!temporary(it, paper) || it.id in kept) return null
+        return (ttl - (now - it.added)).coerceAtLeast(0)
     }
 }
 

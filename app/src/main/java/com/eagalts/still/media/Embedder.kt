@@ -69,6 +69,8 @@ class Embedder(private val ctx: Context) : AutoCloseable {
  */
 class Vectors(private val file: File?) {
     private val map = HashMap<Long, ByteArray>()
+    /** Бумага ли кадр ([Paperwork]); нет ключа — ещё не решали. */
+    private val paper = HashMap<Long, Boolean>()
     private val lock = Any()
     @Volatile var loaded = false; private set
     @Volatile private var dirty = false
@@ -86,9 +88,11 @@ class Vectors(private val file: File?) {
     operator fun get(id: Long): ByteArray? = synchronized(lock) { map[id] }
     fun has(id: Long): Boolean = synchronized(lock) { id in map }
     fun put(id: Long, v: ByteArray) = synchronized(lock) { map[id] = v; dirty = true }
+    fun paper(id: Long): Boolean? = synchronized(lock) { paper[id] }
+    fun putPaper(id: Long, yes: Boolean) = synchronized(lock) { paper[id] = yes; dirty = true }
     val size: Int get() = synchronized(lock) { map.size }
 
-    fun retain(alive: Set<Long>) = synchronized(lock) { if (map.keys.retainAll(alive)) dirty = true }
+    fun retain(alive: Set<Long>) = synchronized(lock) { if (map.keys.retainAll(alive) or paper.keys.retainAll(alive)) dirty = true }
 
     fun saveIfDirty() {
         val f = file ?: return
@@ -98,19 +102,27 @@ class Vectors(private val file: File?) {
 
     private fun encode(): ByteArray {
         val dim = map.values.firstOrNull()?.size ?: 0
-        val b = ByteBuffer.allocate(1 + 4 + 4 + map.size * (8 + dim))
-        b.put(1); b.putInt(dim); b.putInt(map.size)
+        val good = map.count { it.value.size == dim }
+        val b = ByteBuffer.allocate(1 + 4 + 4 + good * (8 + dim) + 4 + paper.size * 9)
+        b.put(2); b.putInt(dim); b.putInt(good)
         for ((k, v) in map) if (v.size == dim) { b.putLong(k); b.put(v) }
+        b.putInt(paper.size)
+        for ((k, v) in paper) { b.putLong(k); b.put(if (v) 1 else 0) }
         return b.array().copyOf(b.position())
     }
 
     private fun decode(raw: ByteArray) {
         val b = ByteBuffer.wrap(raw)
-        if (b.get().toInt() != 1) return
+        val ver = b.get().toInt()
+        if (ver != 1 && ver != 2) return
         val dim = b.int; val n = b.int
         repeat(n) {
             if (b.remaining() < 8 + dim) return
             val k = b.long; val v = ByteArray(dim); b.get(v); map[k] = v
+        }
+        if (ver >= 2 && b.remaining() >= 4) repeat(b.int) {
+            if (b.remaining() < 9) return
+            val k = b.long; paper[k] = b.get().toInt() == 1
         }
     }
 }

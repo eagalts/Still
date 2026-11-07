@@ -544,8 +544,10 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     )
                 }
             }
+            // срок до «Потока» — в самом «Потоке», последней строкой, у знака
+            if (s.filter == Filter.Flow) item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) { FlowTimer(s) }
         }
-        if (s.loaded && feed.cells.isEmpty()) Empty(s.filter)
+        if (s.loaded && feed.cells.isEmpty() && s.filter != Filter.Flow) Empty(s.filter)
         // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
         val scrim by animateFloatAsState(if (overPhotos) 1f else 0f, tween(220), label = "scrim")
         if (scrim > 0.001f) Box(

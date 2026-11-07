@@ -14,6 +14,8 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.activity.ComponentActivity
@@ -566,6 +568,37 @@ class FeedUiTest {
             kotlin.math.abs(android.graphics.Color.green(px) - (bg.green * 255).toInt()) +
             kotlin.math.abs(android.graphics.Color.blue(px) - (bg.blue * 255).toInt())
         assertTrue("стопка пропала из ленты целиком (разница с фоном $d)", d > 30)
+    }
+
+    /**
+     * Срок до «Потока» — ползунком в самом «Потоке»: по умолчанию 3 дня (скриншот двухдневной давности в ленте),
+     * потянул к часу — он уходит из ленты; к трём месяцам — возвращаются и месячные.
+     */
+    @Test fun flowSliderChangesWhatLeaves() {
+        show()
+        fun inFeed(id: Long) = still.feed.cells.any { it.key == id }
+        assertTrue(inFeed(500L))
+        rule.runOnIdle { still.open(Filter.Flow) }
+        until { still.feed.cells.isNotEmpty() }
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithText("3 дня").assertExists()
+        shot("flow-timer")
+        rule.onNodeWithTag("flow-slider").performTouchInput { swipeLeft(startX = right * 0.4f, endX = left) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithText("1 час").assertExists()
+        assertEquals(com.eagalts.still.media.Ephemeral.HOUR, still.flowTtl)
+        rule.runOnIdle { still.open(null) }
+        until { still.feed.cells.none { it.key == 500L } }
+        rule.runOnIdle { still.open(Filter.Flow) }
+        until { still.feed.cells.isNotEmpty() }
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithTag("flow-slider").performTouchInput { swipeRight(startX = left + 10f, endX = right) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithText("3 месяца").assertExists()
+        rule.runOnIdle { still.open(null) }
+        until { still.feed.cells.any { it.key == 600L } }
     }
 
     /** Тап мимо кадров стопки — она складывается обратно. */
