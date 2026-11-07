@@ -76,10 +76,12 @@ class RulesTest {
         val lecture = com.eagalts.still.media.Entry(item(20), (20L..23L).map { item(it) })
         val single = com.eagalts.still.media.Entry(item(30), listOf(item(30)))
         val near = com.eagalts.still.media.Entry(item(31), listOf(item(31)))
+        // магазин: три снимка клавиатуры и фото экрана телефона с карточкой товара — уходит только экран
+        val shop = com.eagalts.still.media.Entry(item(40), (40L..43L).map { item(it) })
         val score = mapOf(1L to -6f, 2L to -5f, 3L to 4f, 4L to -7f, 5L to 3.5f, 6L to -6f, 7L to -4f, 8L to -5f,
-            20L to 5f, 21L to 2.6f, 22L to 6f, 23L to 2.8f, 30L to 3.5f, 31L to 2.9f)
-        val out = com.eagalts.still.media.Paperwork.flowIds(listOf(walk, lecture, single, near), 3f, 3f) { score[it] }
-        assertEquals(setOf(20L, 21L, 22L, 23L, 30L), out)
+            20L to 5f, 21L to 2.6f, 22L to 6f, 23L to 2.8f, 30L to 3.5f, 31L to 2.9f, 40L to -3f, 41L to -2f, 42L to 5.2f, 43L to -4f)
+        val out = com.eagalts.still.media.Paperwork.flowIds(listOf(walk, lecture, single, near, shop), 3f, 3f, { score[it] })
+        assertEquals(setOf(20L, 21L, 22L, 23L, 30L, 42L), out)
     }
 
     /**

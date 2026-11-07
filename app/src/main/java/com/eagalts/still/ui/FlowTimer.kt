@@ -110,5 +110,12 @@ fun FlowTimer(s: Still) {
             t("Скриншоты, записи экрана, мессенджеры, загрузки, а ещё снятые камерой чеки, квитанции, счётчики и экраны"),
             color = p.muted.copy(alpha = 0.8f), fontSize = 12.sp, lineHeight = 16.sp, fontFamily = UiFont,
         )
+        // пока идёт фоновый разбор — тихая строка, сколько осталось: бумаги и экраны находятся по мере разбора
+        s.sorting?.let { (done, all) ->
+            Text(
+                t("Разбираю фото: {0} из {1}", done, all), color = p.muted.copy(alpha = 0.8f), fontSize = 12.sp, fontFamily = UiFont,
+                modifier = Modifier.padding(top = 4.dp).testTag("flow-sorting"),
+            )
+        }
     }
 }

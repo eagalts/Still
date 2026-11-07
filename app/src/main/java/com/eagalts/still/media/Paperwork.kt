@@ -79,15 +79,24 @@ class Paperwork private constructor(
          * (пара серых кадров тумана не утащат прогулку, а лекция с экранами уйдёт целиком, даже если отдельные кадры
          * чуть не дотянули). Оценка ещё не посчитана — кадр в среднем не участвует.
          */
-        fun flowIds(entries: List<Entry>, frame: Float, stack: Float, score: (Long) -> Float?): Set<Long> {
+        fun flowIds(entries: List<Entry>, frame: Float, stack: Float, score: (Long) -> Float?, strong: Float = STRONG): Set<Long> {
             val out = HashSet<Long>()
             for (e in entries) {
                 if (!e.stacked) { val s = score(e.cover.id); if (s != null && s > frame) out += e.cover.id; continue }
                 var sum = 0f; var known = 0
                 for (m in e.members) { val s = score(m.id) ?: continue; sum += s; known++ }
                 if (known * 2 >= e.members.size && known > 0 && sum / known > stack) e.members.forEach { out += it.id }
+                // кадр, в котором распознаватель уверен очень сильно (фото экрана телефона среди снимков клавиатуры
+                // в магазине), уходит и из стопки, которая остаётся
+                else for (m in e.members) { val s = score(m.id); if (s != null && s > strong) out += m.id }
             }
             return out
         }
+
+        /**
+         * «Очень уверен»: выше — уходит один, даже из стопки обычных фото. На открытом архиве событий выше этого —
+         * 3 кадра из 5665 (таблички с объявлениями); самый «бумажный» кадр прогулки в тумане — ниже.
+         */
+        const val STRONG = 4.5f
     }
 }

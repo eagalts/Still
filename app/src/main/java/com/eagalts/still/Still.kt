@@ -107,6 +107,8 @@ class Still(
     ); private set
     /** Кадры камеры, которые признаны бумагами (по стопкам), — уходят в «Поток» вместе с временным. */
     @Volatile var paper: Set<Long> = emptySet(); private set
+    /** Фоновый разбор фото: сколько готово из скольких; null — разбирать нечего. Видно в «Потоке». */
+    var sorting: Pair<Int, Int>? by mutableStateOf(null); private set
     /** Пороги распознавателя (из его файла; до первой загрузки — те, с которыми он обучен). */
     @Volatile private var paperFrame = 3f
     @Volatile private var paperStack = 3f
@@ -190,14 +192,17 @@ class Still(
             val todo = withContext(Dispatchers.Default) { all.filter { thumbs.needsWork(it, embedding) } }
             if (todo.isEmpty()) return@launch
             val model = embedder?.invoke()
+            sorting = 0 to todo.size
             try {
                 // пересборка — после первой порции (видимое внизу складывается сразу), дальше реже и в конце
                 todo.chunked(150).forEachIndexed { i, chunk ->
                     chunk.forEach { runCatching { thumbs.printInBackground(it, model, papers) } }
+                    sorting = minOf(todo.size, (i + 1) * 150) to todo.size
                     if (i == 0 || i % 15 == 14) { printVersion++; rebuild() }
                 }
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable) { model?.close() }
+                sorting = null
             }
             printVersion++; rebuild()
         }
