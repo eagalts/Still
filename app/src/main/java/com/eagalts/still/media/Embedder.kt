@@ -69,8 +69,8 @@ class Embedder(private val ctx: Context) : AutoCloseable {
  */
 class Vectors(private val file: File?) {
     private val map = HashMap<Long, ByteArray>()
-    /** Бумага ли кадр ([Paperwork]); нет ключа — ещё не решали. */
-    private val paper = HashMap<Long, Boolean>()
+    /** Оценка «информация, а не память» ([Paperwork]); нет ключа — ещё не считали. */
+    private val paper = HashMap<Long, Float>()
     private val lock = Any()
     @Volatile var loaded = false; private set
     @Volatile private var dirty = false
@@ -88,11 +88,11 @@ class Vectors(private val file: File?) {
     operator fun get(id: Long): ByteArray? = synchronized(lock) { map[id] }
     fun has(id: Long): Boolean = synchronized(lock) { id in map }
     fun put(id: Long, v: ByteArray) = synchronized(lock) { map[id] = v; dirty = true }
-    fun paper(id: Long): Boolean? = synchronized(lock) { paper[id] }
+    fun paper(id: Long): Float? = synchronized(lock) { paper[id] }
     /** Какими весами решали «бумага или нет»; другие веса — решения забываются и считаются заново. */
     private var paperModel = 0L
     fun usePaperModel(sig: Long) = synchronized(lock) { if (sig != paperModel) { paper.clear(); paperModel = sig; dirty = true } }
-    fun putPaper(id: Long, yes: Boolean) = synchronized(lock) { paper[id] = yes; dirty = true }
+    fun putPaper(id: Long, score: Float) = synchronized(lock) { paper[id] = score; dirty = true }
     val size: Int get() = synchronized(lock) { map.size }
 
     fun retain(alive: Set<Long>) = synchronized(lock) { if (map.keys.retainAll(alive) or paper.keys.retainAll(alive)) dirty = true }
@@ -106,19 +106,19 @@ class Vectors(private val file: File?) {
     private fun encode(): ByteArray {
         val dim = map.values.firstOrNull()?.size ?: 0
         val good = map.count { it.value.size == dim }
-        val b = ByteBuffer.allocate(1 + 4 + 4 + good * (8 + dim) + 8 + 4 + paper.size * 9)
-        b.put(3); b.putInt(dim); b.putInt(good)
+        val b = ByteBuffer.allocate(1 + 4 + 4 + good * (8 + dim) + 8 + 4 + paper.size * 12)
+        b.put(4); b.putInt(dim); b.putInt(good)
         for ((k, v) in map) if (v.size == dim) { b.putLong(k); b.put(v) }
         b.putLong(paperModel)
         b.putInt(paper.size)
-        for ((k, v) in paper) { b.putLong(k); b.put(if (v) 1 else 0) }
+        for ((k, v) in paper) { b.putLong(k); b.putFloat(v) }
         return b.array().copyOf(b.position())
     }
 
     private fun decode(raw: ByteArray) {
         val b = ByteBuffer.wrap(raw)
         val ver = b.get().toInt()
-        if (ver !in 1..3) return
+        if (ver !in 1..4) return
         val dim = b.int; val n = b.int
         repeat(n) {
             if (b.remaining() < 8 + dim) return
@@ -126,9 +126,10 @@ class Vectors(private val file: File?) {
         }
         if (ver >= 3 && b.remaining() >= 8) paperModel = b.long
         // v2 не помнил, какими весами решали, — его решения забываем (paperModel = 0 не совпадёт ни с какими весами)
-        if (ver >= 3 && b.remaining() >= 4) repeat(b.int) {
-            if (b.remaining() < 9) return
-            val k = b.long; paper[k] = b.get().toInt() == 1
+        // v3 хранил «да/нет», v4 — саму оценку (стопка решает по среднему): старые решения не берём
+        if (ver >= 4 && b.remaining() >= 4) repeat(b.int) {
+            if (b.remaining() < 12) return
+            val k = b.long; paper[k] = b.float
         }
     }
 }

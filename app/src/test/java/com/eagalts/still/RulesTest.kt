@@ -67,16 +67,19 @@ class RulesTest {
     }
 
     /**
-     * Решение «бумага» — по стопке: прогулка в тумане, где два серых кадра из восьми похожи на бумагу, остаётся
-     * в ленте; стопка, где бумаг больше половины, уходит целиком; одиночная бумага — сама.
+     * Решение «информация» — по средней оценке стопки: прогулка в тумане, где два серых кадра из восьми похожи на
+     * бумагу, остаётся в ленте; лекция, где часть экранов чуть не дотянула до порога, уходит целиком; одиночный
+     * кадр — по своей оценке.
      */
     @Test fun paperIsDecidedPerStack() {
         val walk = com.eagalts.still.media.Entry(item(1), (1L..8L).map { item(it) })
-        val bills = com.eagalts.still.media.Entry(item(20), (20L..22L).map { item(it) })
+        val lecture = com.eagalts.still.media.Entry(item(20), (20L..23L).map { item(it) })
         val single = com.eagalts.still.media.Entry(item(30), listOf(item(30)))
-        val paper = setOf(3L, 5L, 20L, 21L, 30L)
-        val out = com.eagalts.still.media.Paperwork.flowIds(listOf(walk, bills, single)) { it in paper }
-        assertEquals(setOf(20L, 21L, 22L, 30L), out)
+        val near = com.eagalts.still.media.Entry(item(31), listOf(item(31)))
+        val score = mapOf(1L to -6f, 2L to -5f, 3L to 4f, 4L to -7f, 5L to 3.5f, 6L to -6f, 7L to -4f, 8L to -5f,
+            20L to 5f, 21L to 2.6f, 22L to 6f, 23L to 2.8f, 30L to 3.5f, 31L to 2.9f)
+        val out = com.eagalts.still.media.Paperwork.flowIds(listOf(walk, lecture, single, near), 3f, 3f) { score[it] }
+        assertEquals(setOf(20L, 21L, 22L, 23L, 30L), out)
     }
 
     /**
@@ -87,10 +90,10 @@ class RulesTest {
     @Test fun paperDecisionsFollowModelVersion() {
         val f = java.io.File.createTempFile("scenes", ".bin").apply { delete() }
         val a = com.eagalts.still.media.Vectors(f).apply { load() }
-        a.usePaperModel(1L); a.put(7L, ByteArray(1024) { 1 }); a.putPaper(7L, false); a.saveIfDirty()
+        a.usePaperModel(1L); a.put(7L, ByteArray(1024) { 1 }); a.putPaper(7L, -2.5f); a.saveIfDirty()
         val b = com.eagalts.still.media.Vectors(f).apply { load() }
         b.usePaperModel(1L)
-        assertEquals(false, b.paper(7L))
+        assertEquals(-2.5f, b.paper(7L))
         b.usePaperModel(2L)
         assertEquals(null, b.paper(7L))
         assertTrue(b.has(7L))

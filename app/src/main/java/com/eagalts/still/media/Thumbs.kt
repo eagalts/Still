@@ -68,7 +68,7 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index, 
         val needPrint = !item.video && !index.hasPrint(item.id)
         val needVec = embedder != null && vectors?.has(item.id) == false
         // бумага ли — по вектору; вектор уже есть (посчитан раньше) — миниатюра не нужна
-        fun judge() { val vs = vectors ?: return; if (paperwork != null && vs.paper(item.id) == null) vs[item.id]?.let { vs.putPaper(item.id, paperwork.isPaper(it)) } }
+        fun judge() { val vs = vectors ?: return; if (paperwork != null && vs.paper(item.id) == null) vs[item.id]?.let { vs.putPaper(item.id, paperwork.score(it)) } }
         if (!needPrint && !needVec) { if (paperwork != null) withContext(printPool) { judge() }; return }
         withContext(printPool) {
             // одна миниатюра на всё: 256 — модели нужно 224, отпечатку хватило бы и 160

@@ -107,6 +107,9 @@ class Still(
     ); private set
     /** Кадры камеры, которые признаны бумагами (по стопкам), — уходят в «Поток» вместе с временным. */
     @Volatile var paper: Set<Long> = emptySet(); private set
+    /** Пороги распознавателя (из его файла; до первой загрузки — те, с которыми он обучен). */
+    @Volatile private var paperFrame = 3f
+    @Volatile private var paperStack = 3f
 
     fun changeFlowTtl(ms: Long) {
         if (ms == flowTtl) return
@@ -183,7 +186,7 @@ class Still(
         printJob = scope.launch {
             val papers = paperwork?.let { withContext(Dispatchers.IO) { it() } }
             // веса распознавания бумаг сменились (обновление) — прежние решения пересчитываются по сохранённым векторам
-            papers?.let { vectors.usePaperModel(it.signature) }
+            papers?.let { vectors.usePaperModel(it.signature); paperFrame = it.threshold; paperStack = it.stackThreshold }
             val todo = withContext(Dispatchers.Default) { all.filter { thumbs.needsWork(it, embedding) } }
             if (todo.isEmpty()) return@launch
             val model = embedder?.invoke()
@@ -219,7 +222,7 @@ class Still(
         val cached = entryCache
         val entries = if (cached != null && cached.first == key) cached.second else {
         // бумаги — по стопкам всех кадров (одиночная бумага — по себе), до того как лента решит, что в ней остаётся
-        val pp = Paperwork.flowIds(Moments.build(items, vectors::get, sceneCache), vectors::paper)
+        val pp = Paperwork.flowIds(Moments.build(items, vectors::get, sceneCache), paperFrame, paperStack, vectors::paper)
         paper = pp
         val base = when (f) {
             null -> items.filter { Ephemeral.inFeed(it, t, kept, ttl, pp) }
