@@ -54,5 +54,6 @@
  "з. д.": "W",
  "Место не записано": "Kein Ort gespeichert",
  "Android не удалил кадр": "Android hat das Foto nicht gelöscht",
- "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "Android fragt bei jedem Löschen nach. Schalte in den Einstellungen, die sich gleich öffnen, „Medienverwaltung erlauben“ ein – nur einmal. Fotos landen weiterhin 30 Tage im Papierkorb."
+ "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "Android fragt bei jedem Löschen nach. Schalte in den Einstellungen, die sich gleich öffnen, „Medienverwaltung erlauben“ ein – nur einmal. Fotos landen weiterhin 30 Tage im Papierkorb.",
+ "{0} фото": "{0} Fotos"
 }

@@ -122,9 +122,14 @@ class FeedController(val grid: LazyGridState) {
     var origin = Offset.Zero
     var cells: List<Cell> = emptyList()
     var cols = 3
-    /** Стопка, которая только что раскрылась (её кадры разлетаются из обложки) или складывается обратно. */
-    var fanKey by mutableLongStateOf(-1L)
-    var folding by mutableLongStateOf(-1L)
+    /** Где на экране была стопка, которую открыли: из неё вылетают кадры и в неё же складываются. */
+    var stackFrom: Rect? = null
+    /**
+     * Пока открыта стопка, кадры просмотра вылетают из её сетки и возвращаются в неё, а не в ленту:
+     * [overlayBounds] — где кадр в сетке стопки, [overlayReveal] — докрутить к нему.
+     */
+    var overlayBounds: ((Long) -> Rect?)? = null
+    var overlayReveal: ((Long) -> Unit)? = null
     /** Лента уже встала на место (в конец) и для какого фильтра; стоит ли она в самом конце сейчас. */
     var placed = false
     var shownFilter: Filter? = null
@@ -181,6 +186,12 @@ class FeedController(val grid: LazyGridState) {
     private fun info(id: Long): LazyGridItemInfo? = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
 
     fun bounds(id: Long): Rect? {
+        overlayBounds?.let { return it(id) }
+        return feedBounds(id)
+    }
+
+    /** Где плитка кадра в самой ленте (под открытой стопкой тоже). */
+    fun feedBounds(id: Long): Rect? {
         val i = info(id) ?: return null
         val r = visual(i).translate(origin)
         val vp = grid.layoutInfo.viewportSize.height
@@ -190,6 +201,7 @@ class FeedController(val grid: LazyGridState) {
 
     /** Докрутить, чтобы плитка оказалась на экране (если её не видно), — перед возвращением фото. */
     fun reveal(id: Long) {
+        overlayReveal?.let { it(id); return }
         val idx = cells.indexOfFirst { it.key == id }
         if (idx < 0) return
         val vis = grid.layoutInfo.visibleItemsInfo
@@ -549,7 +561,8 @@ private fun tap(s: Still, ctl: FeedController, index: Int) {
     val c = ctl.cells.getOrNull(index) as? Cell.Tile ?: return
     when {
         s.selection.isNotEmpty() -> s.selection = if (c.item.id in s.selection) s.selection - idsOf(c).toSet() else s.selection + idsOf(c)
-        c.entry.stacked && !c.inStack && c.entry.key !in s.expanded -> { ctl.fanKey = c.entry.key; s.toggleStack(c.entry.key) }
+        // стопка открывается как папка: кадры вылетают из неё поверх размытой ленты
+        c.entry.stacked -> { ctl.stackFrom = ctl.bounds(c.item.id); s.openStack(c.entry) }
         else -> s.view(c.item)
     }
 }
@@ -567,29 +580,10 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     val pick by animateFloatAsState(if (selected) 1f else 0f, fineSpring(0.62f, 700f), label = "pick")
     val gone by animateFloatAsState(if (leaving) 1f else 0f, if (leaving) tween(820, easing = androidx.compose.animation.core.LinearEasing) else tween(0), label = "gone")
 
-    // кадры раскрытой стопки разлетаются из обложки по очереди и складываются обратно
-    val fan = remember(c.entry.key, item.id) { Animatable(if (c.inStack && ctl.fanKey == c.entry.key) 0f else 1f) }
-    val order = if (c.inStack) c.entry.members.indexOf(item).coerceAtLeast(1) else 0
-    // эффекты веера — только у кадров раскрытой стопки: у обычных плиток при прокрутке не запускается ничего
-    if (c.inStack) {
-        LaunchedEffect(c.entry.key, item.id) {
-            if (fan.value < 1f) { delay((order * 16L).coerceAtMost(160L)); fan.animateTo(1f, spring(0.74f, 360f)) }
-        }
-        LaunchedEffect(ctl.folding) {
-            if (ctl.folding == c.entry.key) fan.animateTo(0f, spring(1f, 700f))
-        }
-    }
-    val fanFrom = remember(c.entry.key, item.id) {
-        if (!c.inStack) IntOffset.Zero else {
-            val cover = ctl.grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == c.entry.key }
-            if (cover == null) IntOffset.Zero else {
-                val d = c.entry.members.indexOf(item)
-                val col = cover.column + d
-                val dx = (cover.column - col % cols); val dy = -(col / cols)
-                IntOffset(dx * (cover.size.width), dy * cover.size.height)
-            }
-        }
-    }
+    val stacked = c.entry.stacked
+    // открытая стопка: её плитка в ленте пустеет — кадры как будто вынули (как фото в просмотре)
+    val opened = s.stack?.let { st -> st.members.any { it.id == item.id } } == true
+    val pile = remember { PileCache() }
 
     val spot = remember { Spot() }
     val pose = remember { FloatArray(4) }
@@ -601,29 +595,37 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         modifier.zIndex(if (leaving) 2f else if (c.label != null) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
             .onPlaced { val o = it.positionInParent(); spot.x = o.x; spot.y = o.y; spot.w = it.size.width.toFloat(); spot.h = it.size.height.toFloat() }
             .graphicsLayer {
-                val f = fan.value
                 // линза: место и размер кадра — от его положения на экране (читается при отрисовке, без рекомпозиций)
                 val vp = ctl.grid.layoutInfo.viewportSize
                 Lens.pose(spot.x + spot.w / 2f, spot.y + spot.h / 2f, vp.width.toFloat(), vp.height.toFloat(), ctl.lensNow(), pose)
-                translationX = fanFrom.x * (1f - f) + pose[Lens.TX]
-                translationY = fanFrom.y * (1f - f) + pose[Lens.TY]
-                rotationZ = (1f - f) * (if (order % 2 == 0) 7f else -7f)
-                val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
+                translationX = pose[Lens.TX]
+                translationY = pose[Lens.TY]
+                val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
-                alpha = if (hidden) 0f else f.coerceIn(0f, 1f)
+                alpha = if (hidden || opened) 0f else 1f
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
                 // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
                 val r = (radius.toPx() + lift * pick + lensRadius * ctl.lens) / k.coerceAtLeast(0.3f)
                 shape = ctl.shape(r)
-                clip = !leaving
+                // стопка рисует свои карточки сама: повёрнутые края не должны срезаться квадратом ячейки
+                clip = !leaving && !stacked
             }
     ) {
         val px = ctl.tilePx.takeIf { it > 0 } ?: 256
         val bmp = rememberThumb(s, item, px)
         val shown by animateFloatAsState(if (bmp.value != null) 1f else 0f, if (bmp.fresh) tween(140) else tween(0), label = "load")
         val dust = remember(leaving, bmp.value) { if (leaving) bmp.value?.let(::dustOf) else null }
-        Spacer(
+        // под обложкой — два других кадра стопки, маленькими миниатюрами (их почти не видно, крупнее не нужно)
+        val backs = if (stacked) c.entry.members.filter { it.id != item.id }.let { o -> listOf(o.getOrNull(o.size / 2), o.lastOrNull()) } else emptyList()
+        val back1 = backs.getOrNull(0)?.let { rememberThumb(s, it, 160) }
+        val back2 = backs.getOrNull(1)?.takeIf { it != backs[0] }?.let { rememberThumb(s, it, 160) }
+        if (stacked && !leaving) Spacer(
+            Modifier.fillMaxSize().drawBehind {
+                val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
+                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh)
+            }
+        ) else Spacer(
             Modifier.fillMaxSize().drawBehind {
                 val area = Rect(0f, 0f, size.width, size.height)
                 val b = bmp.value
@@ -644,7 +646,6 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
             }
         )
         if (item.video && cols <= 5) VideoBadge(item.durationMs)
-        if (c.entry.stacked && !c.inStack && cols <= 8) StackBadge(s, ctl, c)
         if (c.label != null) PeriodLabel(c.label, levelOf(cols))
         if (pick > 0.01f) Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(22.dp).graphicsLayer {
             val k = pick.coerceAtLeast(0f); scaleX = k; scaleY = k; alpha = pick.coerceIn(0f, 1f)
@@ -699,38 +700,13 @@ var flyingIdState = mutableLongStateOf(-1L)
 private fun flyingId(@Suppress("UNUSED_PARAMETER") s: Still) = flyingIdState.longValue
 
 @Composable
-private fun androidx.compose.foundation.layout.BoxScope.VideoBadge(ms: Long) {
+internal fun androidx.compose.foundation.layout.BoxScope.VideoBadge(ms: Long) {
     val sec = (ms / 1000).toInt()
     Text(
         "%d:%02d".format(sec / 60, sec % 60), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont,
         style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color(0x80000000), Offset(0f, 1f), 4f)),
         modifier = Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 4.dp),
     )
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.BoxScope.StackBadge(s: Still, ctl: FeedController, c: Cell.Tile) {
-    val p = LocalPalette.current
-    val open = c.entry.key in s.expanded
-    val tint by androidx.compose.animation.animateColorAsState(if (open) p.accent else Color(0x8C000000), tween(200), label = "badge")
-    val scope = rememberCoroutineScope()
-    Row(
-        Modifier.align(Alignment.BottomEnd).padding(5.dp).clip(RoundedCornerShape(50)).background(tint)
-            .bouncy(0.85f) {
-                if (!open) { ctl.fanKey = c.entry.key; s.toggleStack(c.entry.key) }
-                else scope.launch {
-                    // складываем: кадры летят обратно в обложку, потом исчезают из сетки
-                    ctl.folding = c.entry.key
-                    delay(230)
-                    s.toggleStack(c.entry.key)
-                    ctl.folding = -1L
-                }
-            }
-            .padding(horizontal = 7.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(c.entry.members.size.toString(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = UiFont)
-    }
 }
 
 @Composable
@@ -1007,7 +983,7 @@ object Zoom {
 
 
 /** Цвет пустой плитки: приглушённый основной цвет кадра, если он уже известен, иначе — цвет пустой плитки темы. */
-private fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
+internal fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
     val c = s.index.color(item.id) ?: return p.tile
     return androidx.compose.ui.graphics.lerp(Color(c), p.tile, 0.35f)
 }
@@ -1017,4 +993,4 @@ private fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
  * Что выбирает плитка: стопка — все свои кадры (иначе «удалить стопку» отправляло в корзину одну обложку,
  * наверх вставал следующий кадр, и казалось, что удаление не работает), одиночный кадр — себя.
  */
-internal fun idsOf(c: Cell.Tile): List<Long> = if (c.entry.stacked && !c.inStack) c.entry.members.map { it.id } else listOf(c.item.id)
+internal fun idsOf(c: Cell.Tile): List<Long> = if (c.entry.stacked) c.entry.members.map { it.id } else listOf(c.item.id)

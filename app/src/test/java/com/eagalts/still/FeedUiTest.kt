@@ -13,6 +13,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.activity.ComponentActivity
@@ -25,6 +26,7 @@ import com.eagalts.still.ui.StillApp
 import kotlinx.coroutines.MainScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -134,8 +136,15 @@ class FeedUiTest {
     @Before fun setUp() {
         java.util.Locale.setDefault(java.util.Locale("ru", "RU"))
         I18n.init(rule.activity)
-        still = Still(rule.activity, FakeLibrary(items()), Index(null), MainScope(), now = { now })
+        still = Still(rule.activity, FakeLibrary(items()), Index(null), MainScope(), now = { now }, vectors = sceneVectors())
         still.access = Access.FULL
+    }
+
+    /** Векторы сцен, как их дала бы модель: серия 100–103 — одна сцена, остальное ещё не посчитано (по одному). */
+    private fun sceneVectors() = com.eagalts.still.media.Vectors(null).apply {
+        val r = java.util.Random(3)
+        val c = FloatArray(1024) { r.nextGaussian().toFloat() }
+        for (id in 100L..103L) put(id, com.eagalts.still.media.Embedder.quantize(FloatArray(1024) { c[it] + 0.4f * r.nextGaussian().toFloat() }))
     }
 
     /** Ждать, прокручивая главный поток Robolectric: работа ленты уходит в фон и возвращается в него. */
@@ -486,13 +495,68 @@ class FeedUiTest {
 
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
-    @Test fun tapOnStackFansItOut() {
+    /**
+     * Стопка в ленте выглядит стопкой: углы ячейки пустые (карточки с полями и повёрнуты), в центре — кадр;
+     * у одиночного кадра угол — сам кадр.
+     */
+    @Test fun stackLooksLikeAPile() {
+        show()
+        val b = shot("stack-pile")
+        val page = com.eagalts.still.ui.LightPalette.page
+        fun isPage(px: Int) = kotlin.math.abs(android.graphics.Color.red(px) - (page.red * 255).toInt()) < 12 &&
+            kotlin.math.abs(android.graphics.Color.green(px) - (page.green * 255).toInt()) < 12 &&
+            kotlin.math.abs(android.graphics.Color.blue(px) - (page.blue * 255).toInt()) < 12
+        // где плитки видны на самом деле (линза сдвигает и уменьшает их)
+        val pile = rule.runOnIdle { ctl.bounds(103) }!!
+        val single = rule.runOnIdle { ctl.bounds(300) }!!
+        // середина левого края: у стопки там поле вокруг карточек, у одиночного кадра — сам кадр
+        fun edge(r: androidx.compose.ui.geometry.Rect) = b.getPixel((r.left + r.width * 0.025f).toInt(), r.center.y.toInt())
+        assertTrue("край стопки занят — стопка выглядит обычным кадром", isPage(edge(pile)))
+        assertFalse("центр стопки пуст", isPage(b.getPixel(pile.center.x.toInt(), pile.center.y.toInt())))
+        assertFalse("у одиночного кадра край пустой", isPage(edge(single)))
+        // в ленте у стопки нет числа поверх кадра
+        rule.onNodeWithText("4").assertDoesNotExist()
+    }
+
+    /**
+     * Тап по стопке — она открывается как папка: все её кадры сеткой поверх ленты, сверху когда это было;
+     * кадр открывается в просмотре и листаются только кадры стопки; «назад» — в стопку, ещё «назад» — в ленту.
+     */
+    @Test fun tapOpensStackLikeAFolder() {
         show()
         rule.onNodeWithTag("tile-103").performClick()
-        until { still.feed.cells.any { it.key == 100L } }
-        val ids = still.feed.cells.filterIsInstance<Cell.Tile>().map { it.item.id }
-        assertTrue(ids.containsAll(listOf(100L, 101L, 102L, 103L)))
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        // по порядку съёмки: в серии больший номер снят раньше
+        val order = listOf(103L, 102L, 101L, 100L)
+        assertEquals(order, still.stack?.members?.map { it.id })
+        rule.onNodeWithText("4 фото").assertExists()
+        // кадры легли сеткой в 3 столбца, на экране, по порядку съёмки
+        val r = order.map { rule.onNodeWithTag("stack-$it").fetchSemanticsNode().boundsInRoot }
+        assertTrue(r[0].left < r[1].left && r[1].left < r[2].left)
+        assertTrue(r[3].top > r[0].bottom - 1f)
+        val screen = rule.onNodeWithTag("stack").fetchSemanticsNode().boundsInRoot
+        r.forEach { assertTrue("кадр стопки не на экране: $it", screen.contains(it.center)) }
         shot("stack-open")
+        rule.onNodeWithTag("stack-102").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        assertEquals(order, still.viewing?.items?.map { it.id })
+        assertEquals(1, still.viewing?.start)
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        until(3000) { still.viewing == null }
+        assertTrue("после просмотра стопка закрылась", still.stack != null)
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        until(3000) { still.stack == null }
+        rule.onNodeWithTag("stack").assertDoesNotExist()
+    }
+
+    /** Тап мимо кадров стопки — она складывается обратно. */
+    @Test fun tapOutsideClosesStack() {
+        show()
+        rule.onNodeWithTag("tile-103").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        val screen = rule.onNodeWithTag("stack").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("stack").performTouchInput { click(androidx.compose.ui.geometry.Offset(screen.width / 2f, screen.height * 0.85f)) }
+        until(3000) { still.stack == null }
     }
 
     @Test fun tapOpensViewerAndBackFliesHome() {

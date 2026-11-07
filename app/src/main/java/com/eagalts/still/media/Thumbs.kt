@@ -11,9 +11,9 @@ import kotlinx.coroutines.withContext
 /**
  * Миниатюры: своя LRU в памяти поверх системного кэша. Бюджет — от класса памяти телефона (на слабых меньше).
  * Декодирование — не больше 4 потоков сразу; плитка ушла с экрана — её декодирование отменяется.
- * Пока миниатюра в руках, из неё же бесплатно снимаются отпечаток и цвет (для стопок и поиска).
+ * Пока миниатюра в руках, из неё же бесплатно снимаются отпечаток и цвет (для поиска).
  */
-class Thumbs(ctx: Context?, private val lib: Library, private val index: Index) {
+class Thumbs(ctx: Context?, private val lib: Library, private val index: Index, private val vectors: Vectors? = null) {
     private val budget: Int = run {
         val am = ctx?.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         val mb = am?.memoryClass ?: 128
@@ -56,29 +56,24 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index) 
         load(item, 160)
     }
 
-    /** Фоновые отпечатки для стопок: один поток, мимо кэша и мимо потоков видимых плиток — лента не ждёт. */
+    /** Фоновые отпечатки и векторы: один поток, мимо кэша и мимо потоков видимых плиток — лента не ждёт. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private val printPool = Dispatchers.IO.limitedParallelism(1)
 
-    suspend fun printInBackground(item: MediaItem) {
-        if (item.video) return
-        val needPrint = !index.hasPrint(item.id)
-        // без доступа к месту не помечаем «места нет» — иначе после выдачи доступа место так и не прочиталось бы
-        val needPlace = !index.placeChecked(item.id) && lib.canPlace()
-        if (!needPrint && !needPlace) return
+    /** Нужен ли кадру фоновый проход: отпечаток (фото) или вектор сцены (фото и видео — по кадру-обложке). */
+    fun needsWork(item: MediaItem, embedding: Boolean): Boolean =
+        (!item.video && !index.hasPrint(item.id)) || (embedding && vectors?.has(item.id) == false)
+
+    suspend fun printInBackground(item: MediaItem, embedder: Embedder? = null) {
+        val needPrint = !item.video && !index.hasPrint(item.id)
+        val needVec = embedder != null && vectors?.has(item.id) == false
+        if (!needPrint && !needVec) return
         withContext(printPool) {
-            if (needPrint) {
-                val bmp = cancellable { sig -> lib.thumbnail(item, 160, sig) }
-                if (bmp != null) {
-                    runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
-                    bmp.recycle()
-                }
-            }
-            // место съёмки — из самого файла, только для моментов; наружу не уходит, хранится в шифрованном индексе
-            if (needPlace) {
-                val ll = lib.place(item)
-                index.putPlace(item.id, ll?.get(0) ?: Float.NaN, ll?.get(1) ?: Float.NaN)
-            }
+            // одна миниатюра на всё: 256 — модели нужно 224, отпечатку хватило бы и 160
+            val bmp = cancellable { sig -> lib.thumbnail(item, if (needVec) 256 else 160, sig) } ?: return@withContext
+            if (needPrint) runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
+            if (needVec) embedder?.embed(bmp)?.let { vectors?.put(item.id, it) }
+            bmp.recycle()
         }
     }
 

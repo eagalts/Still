@@ -17,7 +17,9 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.eagalts.still.media.Embedder
 import com.eagalts.still.media.Index
+import com.eagalts.still.media.Vectors
 import com.eagalts.still.media.MediaItem
 import com.eagalts.still.media.MediaStoreLibrary
 import com.eagalts.still.media.Source
@@ -42,7 +44,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         Actions.cleanShared(this)
-        still = Still(this, MediaStoreLibrary(this), Index(File(noBackupFilesDir, "index.bin")), lifecycleScope)
+        still = Still(
+            this, MediaStoreLibrary(this), Index(File(noBackupFilesDir, "index.bin")), lifecycleScope,
+            vectors = Vectors(File(noBackupFilesDir, "scenes.bin")), embedder = { Embedder(applicationContext) },
+        )
         still.lastCrash = CrashReporter.takeLast(this)
         still.onExternalClosed = { finish() }
         still.askAccess = ::ask
@@ -134,7 +139,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         unobserve(); unobserve = {}
-        lifecycleScope.launch(Dispatchers.IO) { still.index.saveIfDirty() }
+        lifecycleScope.launch(Dispatchers.IO) { still.index.saveIfDirty(); still.vectors.saveIfDirty() }
         still.thumbs.trim()
         super.onStop()
     }

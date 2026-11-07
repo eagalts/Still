@@ -59,7 +59,7 @@ fun BottomLayer(s: Still, ctl: FeedController) {
     val selecting = s.selection.isNotEmpty()
     val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
     BackHandler(selecting) { s.selection = emptySet() }
-    BackHandler(!selecting && s.filter != null && s.viewing == null && !s.sheet) { s.open(null) }
+    BackHandler(!selecting && s.filter != null && s.viewing == null && !s.sheet && s.stack == null) { s.open(null) }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         // без дымки и плашки: фото идут до самого низа, знак и действия висят на них стеклом
         Column(

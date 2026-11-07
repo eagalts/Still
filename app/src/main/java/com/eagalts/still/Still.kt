@@ -14,8 +14,10 @@ import com.eagalts.still.media.MediaItem
 import com.eagalts.still.media.Query
 import com.eagalts.still.media.Similar
 import com.eagalts.still.media.Source
-import com.eagalts.still.media.Stacks
+import com.eagalts.still.media.Moments
 import com.eagalts.still.media.Thumbs
+import com.eagalts.still.media.Embedder
+import com.eagalts.still.media.Vectors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,12 +41,12 @@ sealed class Filter {
 }
 
 /**
- * Ячейка сетки — кадр. [inStack] — кадр раскрытой стопки (не обложка). [label] — подпись месяца или года
+ * Ячейка сетки — кадр или стопка (её обложка). [label] — подпись месяца или года
  * на первом кадре периода (при отдалении): подпись лежит на фото, а не отдельной полосой.
  */
 sealed class Cell {
     abstract val key: Any
-    class Tile(val entry: Entry, val item: MediaItem, val inStack: Boolean, val label: String? = null) : Cell() {
+    class Tile(val entry: Entry, val item: MediaItem, val label: String? = null) : Cell() {
         override val key: Any get() = item.id
     }
 }
@@ -75,8 +77,12 @@ class Still(
     val index: Index,
     private val scope: CoroutineScope,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Векторы сцен (что на кадре) — для стопок. */
+    val vectors: Vectors = Vectors(null),
+    /** Модель для векторов; null — стопки только из уже посчитанного (тесты, модель не открылась). */
+    private val embedder: (() -> Embedder)? = null,
 ) {
-    val thumbs = Thumbs(ctx, lib, index)
+    val thumbs = Thumbs(ctx, lib, index, vectors)
     private val screenWidthDp: Float = (ctx?.resources?.configuration?.screenWidthDp ?: 412).toFloat()
 
     var access by mutableStateOf(Access.NONE)
@@ -92,7 +98,8 @@ class Still(
     var feed by mutableStateOf(Feed(emptyList(), 3, 0)); private set
     /** Сколько столбцов просили (раскладка под них может ещё строиться). */
     var columns by mutableIntStateOf(3); private set
-    var expanded: Set<Long> by mutableStateOf(emptySet()); private set
+    /** Открытая стопка — поверх ленты, как папка. */
+    var stack: Entry? by mutableStateOf(null); private set
 
     var selection: Set<Long> by mutableStateOf(emptySet())
     var viewing: Viewing? by mutableStateOf(null)
@@ -125,10 +132,10 @@ class Still(
         if (!force && gen != -1L && gen == lastGen && loaded) return
         if (reloadJob?.isActive == true) { reloadAgain = true; return }
         reloadJob = scope.launch {
-            val items = withContext(Dispatchers.IO) { lib.load() }
+            val items = withContext(Dispatchers.IO) { vectors.load(); lib.load() }
             lastGen = gen
             all = items
-            withContext(Dispatchers.Default) { index.retain(items.mapTo(HashSet()) { it.id }) }
+            withContext(Dispatchers.Default) { val alive = items.mapTo(HashSet()) { it.id }; index.retain(alive); vectors.retain(alive) }
             if (filter == Filter.Trash) trashed = withContext(Dispatchers.IO) { lib.load(trashed = true) }
             loaded = true
             rebuild()
@@ -139,44 +146,56 @@ class Still(
 
     private var rebuildJob: Job? = null
     private var printJob: Job? = null
-    /** Версия отпечатков: растёт, когда досчитана порция, — стопки надо склеить заново. */
+    /** Версия отпечатков и векторов: растёт, когда досчитана порция, — стопки надо склеить заново. */
     @Volatile private var printVersion = 0
     @Volatile private var entryCache: Pair<List<Any?>, List<Entry>>? = null
+    /** Сцены посчитанных выходов: выход не изменился — не считаем заново (ключ — состав выхода). */
+    private val sceneCache: MutableMap<Long, IntArray> = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<Long, IntArray>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, IntArray>?) = size > 4000
+        }
+    )
 
     /**
-     * Отпечатки для стопок — по событию загрузки, один раз на кадр: свежие первыми, из системных миниатюр
-     * (160 px). Лента пересобирается порциями — стопки складываются на глазах. Посчитанное хранится в индексе.
+     * Отпечатки и векторы сцен — по событию загрузки, один раз на кадр: свежие первыми, из системных миниатюр.
+     * Модель открыта только на время прохода. Лента пересобирается порциями — стопки складываются на глазах.
      */
     private fun printMissing() {
         if (printJob?.isActive == true) return
-        val places = lib.canPlace()
-        val todo = all.filter { !it.video && (!index.hasPrint(it.id) || (places && !index.placeChecked(it.id))) }
+        val embedding = embedder != null
+        val todo = all.filter { thumbs.needsWork(it, embedding) }
         if (todo.isEmpty()) return
         printJob = scope.launch {
-            // пересборка — после первой порции (видимое сверху складывается сразу), дальше реже и в конце
-            todo.chunked(150).forEachIndexed { i, chunk ->
-                chunk.forEach { runCatching { thumbs.printInBackground(it) } }
-                if (i == 0 || i % 15 == 14) { printVersion++; rebuild() }
+            val model = embedder?.invoke()
+            try {
+                // пересборка — после первой порции (видимое внизу складывается сразу), дальше реже и в конце
+                todo.chunked(150).forEachIndexed { i, chunk ->
+                    chunk.forEach { runCatching { thumbs.printInBackground(it, model) } }
+                    if (i == 0 || i % 15 == 14) { printVersion++; rebuild() }
+                }
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable) { model?.close() }
             }
             printVersion++; rebuild()
         }
     }
 
     fun rebuild() {
-        val f = filter; val items = all; val kept = index.keptIds(); val cols = columns; val exp = expanded
+        val f = filter; val items = all; val kept = index.keptIds(); val cols = columns
         val t = now()
         rebuildJob?.cancel()
         rebuildJob = scope.launch {
-            val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, exp, t) }
+            val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, t) }
             feed = Feed(built, cols, feed.gen + 1)
+            refreshStack(built)
         }
     }
 
     internal fun buildCells(
-        f: Filter?, items: List<MediaItem>, trash: List<MediaItem>, kept: Set<Long>, cols: Int, exp: Set<Long>, t: Long,
+        f: Filter?, items: List<MediaItem>, trash: List<MediaItem>, kept: Set<Long>, cols: Int, t: Long,
     ): List<Cell> {
         // стопки от числа столбцов не зависят: смена ступени пересчитывает только подписи, а не склейку всей ленты
-        val key = listOf(f, System.identityHashCode(items), System.identityHashCode(trash), kept, exp, printVersion, t / Ephemeral.DAY)
+        val key = listOf(f, System.identityHashCode(items), System.identityHashCode(trash), kept, printVersion, t / Ephemeral.DAY)
         val cached = entryCache
         val entries = if (cached != null && cached.first == key) cached.second else {
         val base = when (f) {
@@ -190,11 +209,10 @@ class Still(
             is Filter.Search -> items.filter { f.query.matches(it, index.color(it.id)) }
         }
         // стопки — в ленте и альбомах; в поиске и корзине каждый кадр сам по себе
-        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::color, index::place, index::hash)
+        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Moments.build(base, vectors::get, sceneCache)
         else base.map { Entry(it, listOf(it)) }
         // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
-        newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }
-            .also { entryCache = key to it }
+        newestFirst.asReversed().also { entryCache = key to it }
         }
         val level = levelOf(cols)
         val out = ArrayList<Cell>(entries.size + entries.size / 8)
@@ -214,8 +232,7 @@ class Still(
                 if (col + n > cols || (sameRow && at - lastLabelAt < lastNeed)) label = null
                 else { lastLabelAt = at; lastNeed = n }
             }
-            out += Cell.Tile(e, e.cover, false, label)
-            if (e.stacked && e.key in exp) e.members.forEach { m -> if (m !== e.cover) out += Cell.Tile(e, m, true) }
+            out += Cell.Tile(e, e.cover, label)
         }
         return out
     }
@@ -237,7 +254,7 @@ class Still(
         selection = emptySet()
         if (f == filter) return
         filter = f
-        expanded = emptySet()
+        stack = null
         if (f == Filter.Trash) scope.launch {
             trashed = withContext(Dispatchers.IO) { lib.load(trashed = true) }
             rebuild()
@@ -257,9 +274,22 @@ class Still(
         if (levelOf(old) != levelOf(c) || levelOf(c) != Level.NONE) rebuild()
     }
 
-    fun toggleStack(key: Long) {
-        expanded = if (key in expanded) expanded - key else expanded + key
-        rebuild()
+    fun openStack(e: Entry) { if (e.stacked) stack = e }
+    fun closeStack() { stack = null }
+
+    /** Лента пересобралась (удалили кадр, досчитались векторы) — открытая стопка берёт новый состав или закрывается. */
+    private fun refreshStack(cells: List<Cell>) {
+        val old = stack ?: return
+        val ids = old.members.mapTo(HashSet()) { it.id }
+        val now = cells.asSequence().mapNotNull { (it as? Cell.Tile)?.entry }
+            .maxByOrNull { e -> e.members.count { it.id in ids } }
+        stack = now?.takeIf { it.stacked && it.members.any { m -> m.id in ids } }
+    }
+
+    /** Просмотр кадров открытой стопки: листаются только они. */
+    fun viewInStack(item: MediaItem) {
+        val e = stack ?: return
+        viewing = Viewing(e.members, e.members.indexOf(item).coerceAtLeast(0), filter)
     }
 
     /** Поиск по цвету: досчитать цвет кадрам, которые ещё не показывались, — лента дополняется на глазах. */

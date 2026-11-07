@@ -34,6 +34,22 @@ object Dates {
     /** Время над фото: «6 ноября 2026, 10:15». */
     fun moment(ms: Long): String = fmt("dMMMM", ms) + " " + year(ms) + ", " + fmt("HHmm", ms)
 
+    /**
+     * Заголовок стопки: «7 ноября · 18:27–20:39»; год — только если не этот; через полночь —
+     * «7 ноября 23:10 – 8 ноября 01:20».
+     */
+    fun span(from: Long, to: Long, now: Long = System.currentTimeMillis()): String {
+        val y = year(from) != year(now)
+        fun day(ms: Long) = fmt("dMMMM", ms) + if (y) " " + year(ms) else ""
+        val a = Calendar.getInstance().apply { timeInMillis = from }; val b = Calendar.getInstance().apply { timeInMillis = to }
+        val sameDay = a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+        return when {
+            !sameDay -> day(from) + " " + fmt("HHmm", from) + " – " + day(to) + " " + fmt("HHmm", to)
+            fmt("HHmm", from) == fmt("HHmm", to) -> day(from) + " · " + fmt("HHmm", from)
+            else -> day(from) + " · " + fmt("HHmm", from) + "–" + fmt("HHmm", to)
+        }
+    }
+
     private fun year(ms: Long) = Calendar.getInstance().apply { timeInMillis = ms }.get(Calendar.YEAR)
 
     private fun fmt(skeleton: String, ms: Long): String =

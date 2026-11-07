@@ -54,5 +54,6 @@
  "з. д.": "O",
  "Место не записано": "Local não registrado",
  "Android не удалил кадр": "O Android não excluiu a foto",
- "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "O Android pede confirmação a cada exclusão. Nas configurações que vão abrir, ative “Permitir que o app gerencie mídia” — só uma vez. As fotos continuam indo para a lixeira por 30 dias."
+ "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "O Android pede confirmação a cada exclusão. Nas configurações que vão abrir, ative “Permitir que o app gerencie mídia” — só uma vez. As fotos continuam indo para a lixeira por 30 dias.",
+ "{0} фото": "{0} fotos"
 }

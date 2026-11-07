@@ -72,7 +72,7 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedCon
                     Box(Modifier.fillMaxSize()) {
                         // под шторкой лента уходит в размытие — шторка становится стеклом над твоими фото
                         val blur by androidx.compose.animation.core.animateFloatAsState(
-                            if (s.sheet) 1f else 0f, fineSpring(1f, 300f), label = "blur",
+                            if (s.sheet || s.stack != null) 1f else 0f, fineSpring(1f, 300f), label = "blur",
                         )
                         Box(Modifier.fillMaxSize().graphicsLayer {
                             val r = 28.dp.toPx() * blur.coerceIn(0f, 1f)
@@ -82,6 +82,7 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedCon
                             FeedScreen(s, ctl)
                             BottomLayer(s, ctl)
                         }
+                        StackView(s, ctl)
                         MarkSheet(s, ctl)
                         Viewer(s, ctl)
                         // поверх всего, включая просмотр: раньше шторка открывалась под кадром, и корзина

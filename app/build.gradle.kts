@@ -12,8 +12,10 @@ android {
         applicationId = "com.eagalts.still"
         minSdk = 29
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.1.14"
+        versionCode = 16
+        versionName = "0.1.15"
+        // модель стопок — нативная библиотека: 64-битные телефоны, 32-битные слабые и эмулятор (x86 без нужды)
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     // Ключ и пароли в git не лежат: ~/.gradle/gradle.properties (still.storePassword и т. д.)
@@ -37,7 +39,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // своего ключа ещё нет — подписываем отладочным: release встаёт поверх прежних сборок
             signingConfig = if (hasKey) signingConfigs.getByName("still") else signingConfigs.getByName("debug")
         }
@@ -49,6 +51,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // модель читается из APK напрямую (mmap) — сжимать её нельзя
+    androidResources { noCompress += "tflite" }
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
@@ -78,6 +82,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // базовые профили Compose и библиотек ставятся при установке APK — код ленты сразу скомпилирован, без «разгона»
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // стопки по смыслу кадра: маленькая модель на телефоне (LiteRT), открывается только на фоновый проход
+    implementation("com.google.ai.edge.litert:litert:1.4.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation(bom)

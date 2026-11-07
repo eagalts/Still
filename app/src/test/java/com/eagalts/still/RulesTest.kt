@@ -8,7 +8,7 @@ import com.eagalts.still.media.MediaItem
 import com.eagalts.still.media.Query
 import com.eagalts.still.media.Similar
 import com.eagalts.still.media.Source
-import com.eagalts.still.media.Stacks
+import com.eagalts.still.media.Moments
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -53,103 +53,97 @@ class RulesTest {
         assertEquals(null, Ephemeral.daysLeft(old, now, setOf(2L)))
     }
 
-    @Test fun burstStacksAndBestIsHeaviest() {
-        val items = listOf(
-            item(1, taken = now, size = 900), item(2, taken = now - 500, size = 2000), item(3, taken = now - 1200, size = 1500),
-            item(4, taken = now - 60 * 60_000),   // час спустя — другой момент
-        )
-        val e = Stacks.build(items) { 0L }
+    // ——— стопки: выходы по ритму съёмки, сцены по смыслу кадра ———
+
+    private val rnd = java.util.Random(7)
+    /** Сцена — «что на кадре»: у кадров одной сцены векторы рядом, у разных — в разные стороны (как у модели). */
+    private fun scene(): FloatArray = FloatArray(1024) { rnd.nextGaussian().toFloat() }
+    private fun shot(c: FloatArray): ByteArray =
+        com.eagalts.still.media.Embedder.quantize(FloatArray(c.size) { c[it] + 0.45f * rnd.nextGaussian().toFloat() })
+
+    /** Кадры по возрастанию времени с паузами [gaps] (минуты): первый — в [start]. */
+    private fun timeline(start: Long, gaps: List<Int>, from: Long = 1): List<MediaItem> {
+        var t = start
+        return gaps.mapIndexed { i, g -> t += g * 60_000L; item(from + i, taken = t) }
+    }
+
+    private fun build(asc: List<MediaItem>, vec: Map<Long, ByteArray>) = Moments.build(asc.asReversed(), { vec[it] })
+
+    /** Экраны на паре по кадру в 2–4 минуты — одна стопка; доска посреди пары — своя, экраны она не рвёт. */
+    @Test fun sceneSurvivesOtherShotsInTheMiddle() {
+        val screens = scene(); val board = scene()
+        val asc = timeline(now, listOf(0) + List(19) { 2 + it % 3 })
+        val vec = asc.associate { it.id to shot(if (it.id == 8L || it.id == 9L) board else screens) }
+        val e = build(asc, vec)
+        assertEquals(listOf(18, 2), e.filter { it.stacked }.map { it.members.size }.sortedDescending())
         assertEquals(2, e.size)
-        assertEquals(3, e[0].members.size)
-        assertEquals(2L, e[0].cover.id)
-        assertFalse(e[1].stacked)
     }
 
-    @Test fun nearDuplicatesStackOnlyByHash() {
-        val a = item(1, taken = now); val b = item(2, taken = now - 40_000); val c = item(3, taken = now - 80_000)
-        val hashes = mapOf(1L to 0x0F0F0F0F0F0F0F0FL, 2L to 0x0F0F0F0F0F0F0F0EL, 3L to 0x7777777700000000L)
-        val e = Stacks.build(listOf(a, b, c)) { hashes[it] ?: 0L }
-        assertEquals(listOf(2, 1), e.map { it.members.size })
-        // без отпечатков — только серия по времени
-        assertEquals(3, Stacks.build(listOf(a, b, c)) { 0L }.size)
+    /** Прогулка 18:27–20:39 с паузами до 40 минут — один выход, один туман — одна стопка; чужой кадр посреди — сам по себе. */
+    @Test fun longWalkIsOneStackAndCounterStaysAlone() {
+        val fog = scene(); val counter = scene()
+        val asc = timeline(now, listOf(0, 12, 35, 6, 40, 18, 9, 4, 3, 5))
+        val vec = asc.associate { it.id to shot(fog) } + (99L to shot(counter))
+        val withCounter = (asc + item(99, taken = asc[4].taken + 60_000)).sortedBy { it.taken }
+        val e = build(withCounter, vec)
+        assertEquals(10, e.single { it.stacked }.members.size)
+        assertTrue(e.any { !it.stacked && it.cover.id == 99L })
     }
 
-    /** Похожие кадры в окне 5–10 минут — одна стопка; чужой снимок между ними её не рвёт. */
-    @Test fun similarShotsMinutesApartStackEvenWithOtherShotBetween() {
-        val a = item(1, taken = now); val other = item(2, taken = now - 2 * 60_000); val a2 = item(3, taken = now - 7 * 60_000)
-        val far = item(4, taken = now - 25 * 60_000)
-        val hashes = mapOf(1L to 0x0F0F0F0F0F0F0F0FL, 2L to 0x7070707070707070L, 3L to 0x0F0F0F0F0F0F0F0EL, 4L to 0x0F0F0F0F0F0F0F0FL)
-        val e = Stacks.build(listOf(a, other, a2, far)) { hashes[it] ?: 0L }
-        val stack = e.first { it.stacked }
-        assertEquals(setOf(1L, 3L), stack.members.map { it.id }.toSet())
-        // через 25 минут — уже другой момент, даже если кадр такой же
-        assertTrue(e.any { !it.stacked && it.cover.id == 4L })
-        assertTrue(e.any { !it.stacked && it.cover.id == 2L })
+    /** Одинаковое утром и вечером — разные выходы: стопки не склеиваются через полдня. */
+    @Test fun sameContentInDifferentOutingsIsTwoStacks() {
+        val desk = scene()
+        val asc = timeline(now, listOf(0, 3, 3, 3)) + timeline(now + 8 * 3_600_000L, listOf(0, 3, 3), from = 10)
+        val e = build(asc, asc.associate { it.id to shot(desk) })
+        assertEquals(listOf(3, 4), e.map { it.members.size })
     }
 
-    /** При заметной разнице отпечатков складываем, только если совпадает и основной цвет. */
-    @Test fun looserMatchNeedsSameColor() {
-        val a = item(1, taken = now); val b = item(2, taken = now - 5 * 60_000)
-        val h = mapOf(1L to 0L.inv(), 2L to (0L.inv() xor 0x3FFL))   // 10 бит разницы
-        val blue = android.graphics.Color.rgb(40, 90, 220); val red = android.graphics.Color.rgb(220, 40, 40)
-        assertEquals(1, Stacks.build(listOf(a, b), color = { blue }) { h[it]!! }.size)
-        assertEquals(2, Stacks.build(listOf(a, b), color = { if (it == 1L) blue else red }) { h[it]!! }.size)
+    /** Пауза режет выход, только если она намного длиннее обычных пауз вокруг: 50 минут после серии по 2 — режет. */
+    @Test fun outingsFollowShootingRhythm() {
+        val min = 60_000L
+        fun times(vararg gaps: Int): LongArray { var t = 0L; return LongArray(gaps.size) { t += gaps[it] * min; t } }
+        assertEquals(listOf(0, 0, 0, 1, 1, 1), Moments.outings(times(0, 2, 2, 50, 2, 2)).toList())
+        // прогулка с паузами по 30–40 минут — один выход
+        assertEquals(1, Moments.outings(times(0, 35, 30, 40, 38, 33)).distinct().size)
+        // больше 4 часов — всегда граница
+        assertEquals(listOf(0, 1, 2, 3), Moments.outings(times(0, 300, 300, 300)).toList())
     }
 
-    /**
-     * Плотная серия — фото экрана на паре: два десятка разных по рисунку кадров каждые 2–4 минуты — одна стопка;
-     * короткая серия из несхожих кадров — нет; перерыв больше 5 минут — новый момент.
-     */
-    @Test fun denseSessionStacksAsOneMoment() {
-        val r = java.util.Random(1)
-        var t = now
-        val lab = (1L..20L).map { id -> item(id, taken = t).also { t -= (2 + r.nextInt(3)) * 60_000L } }
-        t -= 40 * 60_000L
-        val few = (21L..23L).map { id -> item(id, taken = t).also { t -= 20 * 60_000L } }
-        val hashes = HashMap<Long, Long>(); (1L..23L).forEach { hashes[it] = r.nextLong() or 1L }
-        val e = Stacks.build(lab + few) { hashes[it]!! }
-        assertEquals(20, e.first().members.size)
-        assertEquals(3, e.drop(1).count { !it.stacked })
+    /** Сцены не обязаны идти подряд: A A B B A A — стопка из четырёх A и стопка из двух B. */
+    @Test fun scenesNeedNotBeContiguous() {
+        val a = scene(); val b = scene()
+        val asc = timeline(now, listOf(0, 4, 4, 4, 4, 4))
+        val vec = asc.associate { it.id to shot(if (it.id == 3L || it.id == 4L) b else a) }
+        val e = build(asc, vec)
+        assertEquals(setOf(setOf(1L, 2L, 5L, 6L), setOf(3L, 4L)), e.map { s -> s.members.map { it.id }.toSet() }.toSet())
+        // стопка стоит на месте своего самого свежего кадра, кадры внутри — в порядке съёмки
+        assertEquals(6L, e.first().members.last().id)
+        assertEquals(listOf(1L, 2L, 5L, 6L), e.first().members.map { it.id })
     }
 
-    /** Прогулка: кадры раз в 8–12 минут больше часа — один момент; весь день понемногу — не один. */
-    @Test fun walkIsOneMomentButWholeDayIsNot() {
-        var t = now
-        val walk = (1L..9L).map { id -> item(id, taken = t).also { t -= (8 + id % 5) * 60_000L } }
-        assertEquals(1, Stacks.build(walk) { 0L }.size)
-        t = now
-        val day = (1L..40L).map { id -> item(id, taken = t).also { t -= 14 * 60_000L } }   // 9 часов по кадру в 14 минут
-        assertTrue(Stacks.build(day) { 0L }.size > 1)
-    }
-
-    /** Прогулка 18:27–20:49 с паузами до 40 минут, точки рядом друг с другом — один момент. */
-    @Test fun longWalkWithPlaceIsOneMoment() {
-        val gaps = listOf(0, 12, 35, 6, 40, 18, 9, 14)   // минуты между кадрами, в сумме 2 ч 14 мин
-        var t = now; var lat = 55.70f
-        val walk = gaps.mapIndexed { i, g -> t -= g * 60_000L; item(i + 1L, taken = t) }
-        val places = walk.associate { it.id to floatArrayOf(lat.also { lat += 0.003f }, 37.6f) }   // шаг ~330 м
-        val e = Stacks.build(walk, place = { places[it] }) { 0L }
+    /** Обложка — самое тяжёлое фото; видео в стопке участвуют, но обложкой становятся, только если фото нет. */
+    @Test fun coverIsHeaviestPhotoAndVideosJoin() {
+        val c = scene()
+        val asc = listOf(item(1, taken = now, size = 900), item(2, taken = now + 60_000, size = 5000, video = true),
+            item(3, taken = now + 120_000, size = 2000), item(4, taken = now + 180_000, size = 1500))
+        val e = build(asc, asc.associate { it.id to shot(c) })
         assertEquals(1, e.size)
-        // без мест тот же ряд кадров распадается: паузы длиннее 15 минут
-        assertTrue(Stacks.build(walk) { 0L }.size > 1)
+        assertEquals(3L, e[0].cover.id)
+        assertEquals(4, e[0].members.size)
     }
 
-    /** Сменил место — новый момент, даже если прошло полчаса; весь день на одном месте — не один момент. */
-    @Test fun placeChangeSplitsAndWholeDayAtHomeIsNotOneMoment() {
-        var t = now
-        val a = (1L..4L).map { item(it, taken = t).also { t -= 10 * 60_000L } }
-        t -= 20 * 60_000L
-        val b = (5L..8L).map { item(it, taken = t).also { t -= 10 * 60_000L } }
-        val places = (a.map { it.id to floatArrayOf(55.70f, 37.60f) } + b.map { it.id to floatArrayOf(55.75f, 37.70f) }).toMap()   // ~8 км
-        assertEquals(2, Stacks.build(a + b, place = { places[it] }) { 0L }.size)
-        t = now
-        val day = (1L..30L).map { item(it, taken = t).also { t -= 50 * 60_000L } }   // 25 часов, всё дома
-        assertTrue(Stacks.build(day, place = { floatArrayOf(55.70f, 37.60f) }) { 0L }.size > 1)
+    /** Без векторов (ещё не посчитаны) — каждый кадр сам по себе, ничего не склеивается наугад. */
+    @Test fun withoutVectorsNothingStacks() {
+        val asc = timeline(now, listOf(0, 1, 1, 1))
+        assertEquals(4, build(asc, emptyMap()).size)
     }
 
-    @Test fun videoAndOtherSourcesNeverStack() {
-        val e = Stacks.build(listOf(item(1), item(2, video = true, taken = now - 100), item(3, Source.SCREENSHOT, taken = now - 200))) { 0L }
-        assertEquals(3, e.size)
+    /** Сжатие вектора в байты не меняет его направления: косинус до и после — почти 1. */
+    @Test fun quantizedVectorKeepsDirection() {
+        val v = scene(); val q = com.eagalts.still.media.Embedder.quantize(v)
+        var dot = 0.0; var nv = 0.0; var nq = 0.0
+        for (i in v.indices) { dot += v[i] * q[i]; nv += v[i] * v[i]; nq += q[i] * q[i].toDouble() }
+        assertTrue(dot / Math.sqrt(nv * nq) > 0.999)
     }
 
     @Test fun similarFindsSameKindOfNoiseButNeverCamera() {
