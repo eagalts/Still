@@ -202,14 +202,15 @@ class FeedUiTest {
     @Test fun zoomOutShowsMonthsThenOnlyYears() {
         show()
         rule.runOnIdle { still.zoomTo(8) }
-        until { still.feed.cols == 8 }
+        // раскладка — сразу, подписи досчитываются следом
+        until { still.feed.cols == 8 && still.feed.cells.any { (it as Cell.Tile).label != null } }
         // подписи — на первых кадрах периодов, отдельных полос нет: все ячейки — кадры
         assertTrue(still.feed.cells.all { it is Cell.Tile })
         val months = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(months.toString(), months.isNotEmpty() && months.all { Regex("^\\p{L}+ \\d{4}$").matches(it) })
         shot("zoom-months")
         rule.runOnIdle { still.zoomTo(13) }
-        until { still.feed.cols == 13 }
+        until { still.feed.cols == 13 && still.feed.cells.any { (it as Cell.Tile).label?.all(Char::isDigit) == true } }
         val years = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(years.isNotEmpty() && years.all { Regex("\\d{4}").matches(it) })
         shot("zoom-years")
@@ -219,7 +220,8 @@ class FeedUiTest {
     @Test fun zoomedOutIsThinAppleGrid() {
         show()
         rule.runOnIdle { still.zoomTo(8) }
-        until { still.feed.cols == 8 }
+        // раскладка — сразу, подписи досчитываются следом
+        until { still.feed.cols == 8 && still.feed.cells.any { (it as Cell.Tile).label != null } }
         val b = shot("grid-8")
         val y = b.height * 3 / 4
         val page = android.graphics.Color.WHITE

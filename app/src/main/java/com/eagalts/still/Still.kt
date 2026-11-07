@@ -139,6 +139,9 @@ class Still(
 
     private var rebuildJob: Job? = null
     private var printJob: Job? = null
+    /** Версия отпечатков: растёт, когда досчитана порция, — стопки надо склеить заново. */
+    @Volatile private var printVersion = 0
+    @Volatile private var entryCache: Pair<List<Any?>, List<Entry>>? = null
 
     /**
      * Отпечатки для стопок — по событию загрузки, один раз на кадр: свежие первыми, из системных миниатюр
@@ -152,9 +155,9 @@ class Still(
             // пересборка — после первой порции (видимое сверху складывается сразу), дальше реже и в конце
             todo.chunked(150).forEachIndexed { i, chunk ->
                 chunk.forEach { runCatching { thumbs.ensurePrint(it) } }
-                if (i == 0 || i % 8 == 7) rebuild()
+                if (i == 0 || i % 8 == 7) { printVersion++; rebuild() }
             }
-            rebuild()
+            printVersion++; rebuild()
         }
     }
 
@@ -171,6 +174,10 @@ class Still(
     internal fun buildCells(
         f: Filter?, items: List<MediaItem>, trash: List<MediaItem>, kept: Set<Long>, cols: Int, exp: Set<Long>, t: Long,
     ): List<Cell> {
+        // стопки от числа столбцов не зависят: смена ступени пересчитывает только подписи, а не склейку всей ленты
+        val key = listOf(f, System.identityHashCode(items), System.identityHashCode(trash), kept, exp, printVersion, t / Ephemeral.DAY)
+        val cached = entryCache
+        val entries = if (cached != null && cached.first == key) cached.second else {
         val base = when (f) {
             null -> items.filter { Ephemeral.inFeed(it, t, kept) }
             Filter.Flow -> items.filter { it.temporary }
@@ -185,7 +192,9 @@ class Still(
         val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::color, index::hash)
         else base.map { Entry(it, listOf(it)) }
         // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
-        val entries = newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }
+        newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }
+            .also { entryCache = key to it }
+        }
         val level = levelOf(cols)
         val out = ArrayList<Cell>(entries.size + entries.size / 8)
         val cal = Calendar.getInstance()
@@ -235,15 +244,16 @@ class Still(
     }
 
     /**
-     * Смена ступени. Пока подписей нет (обычный масштаб), ячейки от числа столбцов не зависят — раскладка
-     * меняется сразу, в этом же кадре, без пересборки ленты (посреди щипка её нельзя ждать).
+     * Смена ступени. Раскладка меняется сразу, в этом же кадре, на тех же ячейках — посреди щипка пересборку ленты
+     * ждать нельзя (пока она шла, сетка рисовалась уменьшенной, с пустыми краями).
      */
     fun zoomTo(c: Int) {
         if (c == columns) return
         val old = columns
         columns = c
-        if (levelOf(old) == Level.NONE && levelOf(c) == Level.NONE && feed.cols == old) feed = Feed(feed.cells, c, feed.gen + 1)
-        else rebuild()
+        // раскладка — сразу, в этом же кадре; если сменился уровень подписей (месяцы, годы) — они досчитываются следом
+        feed = Feed(feed.cells, c, feed.gen + 1)
+        if (levelOf(old) != levelOf(c) || levelOf(c) != Level.NONE) rebuild()
     }
 
     fun toggleStack(key: Long) {
