@@ -90,6 +90,22 @@ class RulesTest {
         assertTrue(e.any { !it.stacked && it.cover.id == 99L })
     }
 
+    /**
+     * Пауза — довод, а не стена: браузер 18:26–18:28 (кадр в минуту), час с лишним перерыва, и снова браузер
+     * 19:35–21:25 — одна стопка. Раньше пауза в 67 минут резала их на две, хотя на кадрах одно и то же.
+     */
+    @Test fun sameContentAcrossLongPauseIsOneStack() {
+        val browser = scene()
+        val asc = timeline(now, listOf(0, 1, 1, 67) + List(17) { 5 + it % 3 })
+        val e = build(asc, asc.associate { it.id to shot(browser) })
+        assertEquals(1, e.size)
+        assertEquals(21, e[0].members.size)
+        // а другое содержимое после такой же паузы — отдельно
+        val other = scene()
+        val e2 = build(asc, asc.associate { it.id to shot(if (it.id <= 3L) other else browser) })
+        assertEquals(listOf(18, 3), e2.map { it.members.size })
+    }
+
     /** Одинаковое утром и вечером — разные выходы: стопки не склеиваются через полдня. */
     @Test fun sameContentInDifferentOutingsIsTwoStacks() {
         val desk = scene()

@@ -4,11 +4,13 @@ package com.eagalts.still.media
  * Правило 2 — «лента моментов». Стопка — это сцена: кадры одного выхода, на которых одно и то же
  * (экраны на паре, туман на прогулке, записи экрана), даже если между ними сняты другие.
  *
- * 1. Выходы — по ритму съёмки: пауза режет, только если она намного длиннее обычных пауз вокруг неё
- *    (прогулка с перерывами по 40 минут — один выход) и не короче [FLOOR_MS]; пауза больше [HARD_MS] режет всегда.
- * 2. Сцены внутри выхода — по смыслу кадра (вектор модели, [Embedder]): средняя связь, склеиваем, пока среднее
+ * 1. Выходы — по ритму съёмки: пауза отделяет выход, если она намного длиннее обычных пауз вокруг неё
+ *    (прогулка с перерывами по 40 минут — один выход) и не короче [FLOOR_MS]. Такая граница — довод, а не стена:
+ *    кадры по разные её стороны дальше друг от друга на [BETA], и одно и то же содержимое склеивается и через паузу
+ *    (браузер в 18:26 и он же с 19:35). Стена — только пауза больше [HARD_MS].
+ * 2. Сцены — по смыслу кадра (вектор модели, [Embedder]): средняя связь, склеиваем, пока среднее
  *    расстояние между группами не больше [TAU]. Расстояние — непохожесть (1 − косинус) плюс немного за разницу
- *    во времени ([ALPHA] за [T_MS] и больше): из двух одинаково похожих кадров ближе тот, что снят рядом.
+ *    во времени ([ALPHA] за [T_MS] и больше) и за границу выхода ([BETA]).
  * Чужой кадр посреди сцены её не рвёт: сцена собирается по сходству, а не по соседству.
  * Одиночный кадр остаётся обычным фото. Пороги подобраны на открытом архиве событий и проверены на реальных лентах.
  */
@@ -20,6 +22,7 @@ object Moments {
     const val WIN = 8
     const val TAU = 0.85f
     const val ALPHA = 0.1f
+    const val BETA = 0.1f
     const val T_MS = 3 * 60 * 60_000L
     /** Выход длиннее — режется по самым большим паузам: матрица расстояний растёт как квадрат. */
     const val MAX_OUTING = 600
@@ -53,7 +56,10 @@ object Moments {
      * Средняя связь цепочкой ближайших соседей (NN-chain): O(n²) по времени, без перебора всех пар на каждом шаге.
      * Средняя связь не даёт инверсий, поэтому разрез «склейки не дальше [tau]» — ровно группы на этом пороге.
      */
-    fun scenes(vecs: List<ByteArray>, times: LongArray, tau: Float = TAU, alpha: Float = ALPHA): IntArray {
+    fun scenes(
+        vecs: List<ByteArray>, times: LongArray, outing: IntArray? = null,
+        tau: Float = TAU, alpha: Float = ALPHA, beta: Float = BETA,
+    ): IntArray {
         val n = vecs.size
         if (n < 2) return IntArray(n)
         val norm = FloatArray(n) { i -> var s = 0L; for (b in vecs[i]) s += b * b; Math.sqrt(s.toDouble()).toFloat().coerceAtLeast(1e-6f) }
@@ -64,7 +70,7 @@ object Moments {
             for (k in a.indices) dot += a[k] * b[k]
             val cos = dot / (norm[i] * norm[j])
             val dt = Math.abs(times[i] - times[j]).toFloat() / T_MS
-            val v = (1f - cos) + alpha * minOf(1f, dt)
+            val v = (1f - cos) + alpha * minOf(1f, dt) + if (outing != null && outing[i] != outing[j]) beta else 0f
             d[i * n + j] = v; d[j * n + i] = v
         }
         val size = IntArray(n) { 1 }
@@ -114,10 +120,11 @@ object Moments {
         val group = IntArray(n) { -1 }
         var next = 0
         var from = 0
+        // стена — только пауза больше HARD_MS; границы выходов внутри — мягкие (BETA в расстоянии)
         while (from < n) {
             var to = from
-            while (to + 1 < n && out[to + 1] == out[from]) to++
-            for ((a, b) in split(times, from, to)) next = scenesOf(asc, a, b, vec, cache, group, next)
+            while (to + 1 < n && times[to + 1] - times[to] <= HARD_MS) to++
+            for ((a, b) in split(times, from, to)) next = scenesOf(asc, a, b, out, vec, cache, group, next)
             from = to + 1
         }
         // кадры без пары — сами по себе; стопка — в порядке съёмки
@@ -135,7 +142,7 @@ object Moments {
         return entries
     }
 
-    /** Длинный выход режется по самым большим паузам на куски не больше [MAX_OUTING]. */
+    /** Длинный отрезок без стен режется по самым большим паузам на куски не больше [MAX_OUTING]. */
     private fun split(times: LongArray, a: Int, b: Int): List<Pair<Int, Int>> {
         if (b - a + 1 <= MAX_OUTING) return listOf(a to b)
         var at = a + 1; var best = -1L
@@ -144,14 +151,14 @@ object Moments {
     }
 
     private fun scenesOf(
-        asc: List<MediaItem>, a: Int, b: Int, vec: (Long) -> ByteArray?, cache: MutableMap<Long, IntArray>?,
+        asc: List<MediaItem>, a: Int, b: Int, out: IntArray, vec: (Long) -> ByteArray?, cache: MutableMap<Long, IntArray>?,
         group: IntArray, base: Int,
     ): Int {
         val idx = (a..b).filter { vec(asc[it].id) != null }
         if (idx.size < 2) return base
         var sig = 1125899906842597L
-        for (i in idx) sig = 31 * sig + asc[i].id
-        val lab = cache?.get(sig) ?: scenes(idx.map { vec(asc[it].id)!! }, LongArray(idx.size) { asc[idx[it]].taken })
+        for (i in idx) sig = 31 * (31 * sig + asc[i].id) + out[i]
+        val lab = cache?.get(sig) ?: scenes(idx.map { vec(asc[it].id)!! }, LongArray(idx.size) { asc[idx[it]].taken }, IntArray(idx.size) { out[idx[it]] })
             .also { cache?.put(sig, it) }
         val count = IntArray(idx.size)
         for (l in lab) count[l]++
