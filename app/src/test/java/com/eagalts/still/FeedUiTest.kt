@@ -455,6 +455,15 @@ class FeedUiTest {
         assertTrue("щипок не распознан: столбцов ${still.feed.cols}", still.feed.cols > 3)
     }
 
+    /** Долгое нажатие на стопку выбирает все её кадры — «удалить» уносит в корзину стопку целиком, а не обложку. */
+    @Test fun selectingStackSelectsAllItsPhotos() {
+        show()
+        rule.onNodeWithTag("tile-103").performTouchInput { longClick() }
+        rule.waitForIdle()
+        assertEquals(setOf(100L, 101L, 102L, 103L), still.selection)
+        assertEquals(4, still.selected().size)
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

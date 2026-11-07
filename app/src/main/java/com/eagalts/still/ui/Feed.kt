@@ -371,7 +371,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                         val a = dragAnchor; val b = hit.index
                         if (a < 0) return
                         val (lo, hi) = if (a <= b) a to b else b to a
-                        val ids = (lo..hi).mapNotNull { (tiles.getOrNull(it) as? Cell.Tile)?.item?.id }
+                        val ids = (lo..hi).flatMap { (tiles.getOrNull(it) as? Cell.Tile)?.let(::idsOf) ?: emptyList() }
                         val next = if (adding) base + ids else base - ids.toSet()
                         if (next != s.selection) {
                             s.selection = next
@@ -548,7 +548,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
 private fun tap(s: Still, ctl: FeedController, index: Int) {
     val c = ctl.cells.getOrNull(index) as? Cell.Tile ?: return
     when {
-        s.selection.isNotEmpty() -> s.selection = if (c.item.id in s.selection) s.selection - c.item.id else s.selection + c.item.id
+        s.selection.isNotEmpty() -> s.selection = if (c.item.id in s.selection) s.selection - idsOf(c).toSet() else s.selection + idsOf(c)
         c.entry.stacked && !c.inStack && c.entry.key !in s.expanded -> { ctl.fanKey = c.entry.key; s.toggleStack(c.entry.key) }
         else -> s.view(c.item)
     }
@@ -1011,3 +1011,10 @@ private fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
     val c = s.index.color(item.id) ?: return p.tile
     return androidx.compose.ui.graphics.lerp(Color(c), p.tile, 0.35f)
 }
+
+
+/**
+ * Что выбирает плитка: стопка — все свои кадры (иначе «удалить стопку» отправляло в корзину одну обложку,
+ * наверх вставал следующий кадр, и казалось, что удаление не работает), одиночный кадр — себя.
+ */
+internal fun idsOf(c: Cell.Tile): List<Long> = if (c.entry.stacked && !c.inStack) c.entry.members.map { it.id } else listOf(c.item.id)
