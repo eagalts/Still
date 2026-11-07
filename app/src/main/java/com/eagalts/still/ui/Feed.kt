@@ -179,6 +179,8 @@ class FeedController(val grid: LazyGridState) {
         val vis = grid.layoutInfo.visibleItemsInfo
         val i = vis.firstOrNull { it.index == idx }
         val vp = grid.layoutInfo.viewportSize.height
+        // под линзой ряд кадра встаёт ровно в центр (поля в полэкрана: «в начало» = в центр), как у магнитов
+        if (Lens.strengthFor(cols) > 0f) { grid.requestScrollToItem(idx, 0); return }
         if (i != null) {
             val top = i.offset.y - grid.layoutInfo.viewportStartOffset
             if (top > vp * 0.12f && top + i.size.height < vp * 0.85f) return

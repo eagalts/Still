@@ -1,7 +1,6 @@
 package com.eagalts.still.ui
 
 import android.graphics.Bitmap
-import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
@@ -22,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -112,6 +113,12 @@ fun Viewer(s: Still, ctl: FeedController) {
     var chrome by remember(v) { mutableStateOf(true) }
     var zoomed by remember(v) { mutableStateOf(false) }
 
+    // один плеер на весь просмотр: создаётся при открытии, освобождается при закрытии
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pb = remember(v) { Playback(ctx) }
+    DisposableEffect(v) { onDispose { pb.release() } }
+    val settled = v.items.getOrNull(pager.settledPage)
+
     LaunchedEffect(item.id) { flyingIdState.longValue = item.id }
     DisposableEffect(v) { onDispose { flyingIdState.longValue = -1L } }
     LaunchedEffect(v) {
@@ -164,6 +171,11 @@ fun Viewer(s: Still, ctl: FeedController) {
         Glow(s, item, Modifier.fillMaxSize().graphicsLayer { alpha = bgAlpha })
 
         val inFlight = f < 0.999f || closing || dismissing
+        // видео запускается само, когда долистал до него и кадр долетел; ушёл — останавливается
+        LaunchedEffect(settled?.id, f >= 0.999f, closing) {
+            val it = settled
+            if (it != null && it.video && f >= 0.999f && !closing) pb.playVideo(it.id, s.lib.uri(it)) else pb.stop()
+        }
         val thumb = rememberLarge(s, item)
         if (inFlight) {
             // летящий кадр: от квадрата плитки к целому кадру, скругление плитки → 0
@@ -175,7 +187,8 @@ fun Viewer(s: Still, ctl: FeedController) {
             val start = from
             val rect = if (start != null) lerpRect(start, target, f.coerceIn(-0.1f, 1.1f)) else target
             val alpha = if (start == null) f.coerceIn(0f, 1f) else 1f
-            val r = with(density) { radiusFor(ctl.cols).toPx() } * (1f - f).coerceIn(0f, 1f) +
+            // скругление плитки под линзой — тот же радиус, что у плитки в ленте: без скачка формы на взлёте
+            val r = with(density) { radiusFor(ctl.cols).toPx() + 14.dp.toPx() * ctl.lensNow() } * (1f - f).coerceIn(0f, 1f) +
                 with(density) { 18.dp.toPx() } * pull
             Canvas(Modifier.fillMaxSize()) {
                 val b = thumb ?: return@Canvas
@@ -195,7 +208,7 @@ fun Viewer(s: Still, ctl: FeedController) {
         ) { page ->
             val it = v.items[page]
             Page(
-                s, it, box,
+                s, it, box, pb, active = page == pager.settledPage && !inFlight,
                 onTap = { chrome = !chrome },
                 onZoom = { z -> if (page == pager.currentPage) zoomed = z },
                 onDrag = { d ->
@@ -212,7 +225,7 @@ fun Viewer(s: Still, ctl: FeedController) {
         }
 
         val ui by animateFloatAsState(if (chrome && !dismissing && !closing && f > 0.98f) 1f else 0f, tween(180), label = "chrome")
-        if (ui > 0.001f) Chrome(s, item, v.fromFilter != null, ui, onShowInFeed = { s.showInFeed(item) })
+        if (ui > 0.001f) Chrome(s, item, v.fromFilter != null, ui, pb, onShowInFeed = { s.showInFeed(item) })
     }
 }
 
@@ -287,7 +300,7 @@ private fun rememberLarge(s: Still, item: MediaItem): ImageBitmap? {
  */
 @Composable
 private fun Page(
-    s: Still, item: MediaItem, box: Size,
+    s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean,
     onTap: () -> Unit, onZoom: (Boolean) -> Unit, onDrag: (Offset) -> Unit, onDragEnd: (Float) -> Unit,
 ) {
     val density = LocalDensity.current
@@ -300,8 +313,11 @@ private fun Page(
     }
     val scale = remember { Animatable(1f) }
     val pan = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
-    var playing by remember { mutableStateOf(false) }
     val rect = fit(item.width, item.height, box)
+    val view = LocalView.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    // живое фото: зажал — оживает, отпустил — замирает; тап после удержания — не тап
+    var held by remember { mutableStateOf(false) }
 
     fun clampPan(o: Offset, k: Float): Offset {
         val mx = max(0f, (rect.width * k - box.width) / 2f); val my = max(0f, (rect.height * k - box.height) / 2f)
@@ -309,7 +325,32 @@ private fun Page(
     }
 
     Box(
-        Modifier.fillMaxSize().pointerInput(item.id) {
+        Modifier.fillMaxSize().pointerInput(item.id, active) {
+            if (item.video || !active) return@pointerInput
+            val slop = viewConfiguration.touchSlop
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val moved = withTimeoutOrNull(380) {
+                    while (true) {
+                        val e = awaitPointerEvent()
+                        if (e.changes.none { it.pressed } || e.changes.size > 1) return@withTimeoutOrNull true
+                        if ((e.changes.first().position - down.position).getDistance() > slop) return@withTimeoutOrNull true
+                    }
+                    @Suppress("UNREACHABLE_CODE") true
+                }
+                if (moved != null || scale.value > 1.01f) return@awaitEachGesture
+                held = true
+                scope.launch {
+                    val off = withContext(Dispatchers.IO) { com.eagalts.still.media.Motion.videoOffset(ctx, s.lib.uri(item)) }
+                    if (off != null && held) {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        pb.playMotion(item.id, ctx, s.lib.uri(item), off)
+                    }
+                }
+                do { val e = awaitPointerEvent() } while (e.changes.any { it.pressed })
+                pb.stopMotion(item.id)
+            }
+        }.pointerInput(item.id) {
             val slop = viewConfiguration.touchSlop
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
@@ -328,6 +369,7 @@ private fun Page(
                             launch { scale.animateTo(1f, spring(0.8f, 500f)) }
                             pan.animateTo(Offset.Zero, spring(0.8f, 500f))
                         }
+                        if (held) { held = false; break }
                         if (tapCandidate && mode == 0) {
                             // двойной тап: ждём второе касание; нет — это одиночный тап
                             val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown(requireUnconsumed = false) }
@@ -404,32 +446,22 @@ private fun Page(
             val b = full ?: thumb ?: return@Canvas
             drawCover(b, rect)
         }
-        if (item.video) {
-            if (playing) AndroidView(
-                factory = { ctx ->
-                    VideoView(ctx).apply {
-                        setVideoURI(s.lib.uri(item))
-                        setOnPreparedListener { it.isLooping = false; start() }
-                        setOnCompletionListener { playing = false }
-                    }
-                },
-                modifier = Modifier.align(Alignment.Center).size(
-                    with(density) { rect.width.toDp() }, with(density) { rect.height.toDp() }
-                ),
-                onRelease = { it.stopPlayback() },
-            ) else Box(
-                Modifier.align(Alignment.Center).size(68.dp).clip(CircleShape).background(Color(0x66000000))
-                    .bouncy(0.85f) { playing = true },
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Play, t("Смотреть"), tint = Color.White, modifier = Modifier.size(28.dp).padding(start = 3.dp)) }
-        }
+        // видео и ожившее фото — поверх кадра, в его же рамке; появляются с первым кадром (без чёрной вспышки)
+        val mine = pb.owner == item.id && active
+        val shown by animateFloatAsState(if (mine && pb.firstFrame) 1f else 0f, tween(if (mine) 120 else 220), label = "video")
+        if (mine || shown > 0.01f) AndroidView(
+            factory = { c -> android.view.TextureView(c) },
+            update = { tv -> if (mine) pb.attach(tv) },
+            modifier = Modifier.align(Alignment.Center)
+                .size(with(density) { rect.width.toDp() }, with(density) { rect.height.toDp() })
+                .graphicsLayer { alpha = shown },
+        )
     }
 }
 
-
 /** Немногие элементы просмотра: время сверху, три действия снизу. Тап по фото — прячутся. */
 @Composable
-private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, onShowInFeed: () -> Unit) {
+private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb: Playback, onShowInFeed: () -> Unit) {
     val left = s.daysLeft(item)
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = a.coerceIn(0f, 1f) }) {
         Column(
@@ -458,17 +490,126 @@ private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, onS
                 )
             }
         }
-        Row(
+        Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))
             ).navigationBarsPadding().padding(top = 24.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
+        if (item.video && pb.owner == item.id) VideoBar(pb)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             ChromeButton(Icons.Share, t("Поделиться")) { s.share(listOf(item)) }
             ChromeButton(if (item.favorite) Icons.HeartFilled else Icons.Heart, t("Избранное")) { s.favorite(listOf(item), !item.favorite) }
             ChromeButton(Icons.Trash, t("Удалить")) { s.trash(listOf(item)) }
         }
+        }
     }
+}
+
+/**
+ * Видео: пауза и тонкая полоса времени. Полосу можно тянуть — кадр идёт за пальцем; при касании полоса
+ * утолщается пружиной. Позиция читается по кадрам, только пока видео играет и полоса на экране.
+ */
+@Composable
+private fun VideoBar(pb: Playback) {
+    val density = LocalDensity.current
+    var pos by remember { mutableStateOf(pb.position()) }
+    var scrub by remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(pb.playing, scrub) {
+        while (pb.playing && scrub == null) { androidx.compose.runtime.withFrameNanos { }; pos = pb.position() }
+        pos = pb.position()
+    }
+    val dur = pb.duration().coerceAtLeast(1L)
+    val frac = scrub ?: (pos.toFloat() / dur).coerceIn(0f, 1f)
+    val thick by animateFloatAsState(if (scrub != null) 1f else 0f, fineSpring(0.6f, 700f), label = "thick")
+    Row(Modifier.fillMaxWidth().testTag("video-bar").padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp).bouncy(0.82f) { pb.toggle() }, contentAlignment = Alignment.Center) {
+            androidx.compose.animation.Crossfade(pb.playing, label = "pp") { on ->
+                Icon(if (on) Icons.Pause else Icons.Play, null, tint = Color.White, modifier = Modifier.size(if (on) 22.dp else 20.dp))
+            }
+        }
+        BoxWithConstraints(
+            Modifier.weight(1f).height(32.dp).pointerInput(Unit) {
+                awaitEachGesture {
+                    val d = awaitFirstDown(); d.consume()
+                    val w = size.width.toFloat().coerceAtLeast(1f)
+                    scrub = (d.position.x / w).coerceIn(0f, 1f); pb.seek((scrub!! * dur).toLong())
+                    while (true) {
+                        val e = awaitPointerEvent(); val c = e.changes.first()
+                        if (!c.pressed) break
+                        c.consume(); scrub = (c.position.x / w).coerceIn(0f, 1f); pb.seek((scrub!! * dur).toLong())
+                    }
+                    pos = pb.position(); scrub = null
+                }
+            },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            val h = with(density) { (3.dp + 3.dp * thick).toPx() }
+            Canvas(Modifier.fillMaxWidth().height(12.dp)) {
+                val y = size.height / 2f
+                drawRoundRect(Color.White.copy(alpha = 0.28f), Offset(0f, y - h / 2f), Size(size.width, h), androidx.compose.ui.geometry.CornerRadius(h / 2f))
+                drawRoundRect(Color.White, Offset(0f, y - h / 2f), Size(size.width * frac, h), androidx.compose.ui.geometry.CornerRadius(h / 2f))
+            }
+        }
+        Text(
+            clock(((1f - frac) * dur).toLong()), color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, fontFamily = UiFont,
+            modifier = Modifier.padding(start = 10.dp, end = 6.dp).width(44.dp),
+        )
+    }
+}
+
+private fun clock(ms: Long): String { val s = (ms / 1000).toInt(); return "−%d:%02d".format(s / 60, s % 60) }
+
+/**
+ * Плеер просмотра (Media3): один на весь просмотр. [owner] — чей кадр он сейчас показывает (видео или живое фото).
+ * Состояние для экрана — в Compose-полях; слушатель плеера только переключает их.
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+class Playback(ctx: android.content.Context) {
+    private val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
+    var owner by mutableStateOf(-1L); private set
+    var firstFrame by mutableStateOf(false); private set
+    var playing by mutableStateOf(false); private set
+    private var surface: android.view.TextureView? = null
+
+    init {
+        player.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
+            override fun onPlaybackStateChanged(state: Int) {
+                // досмотрел — встаёт на начало, на паузу: следующее нажатие — заново
+                if (state == androidx.media3.common.Player.STATE_ENDED) { player.pause(); player.seekTo(0) }
+            }
+        })
+    }
+
+    fun attach(tv: android.view.TextureView) { if (surface !== tv) { surface = tv; player.setVideoTextureView(tv) } }
+
+    fun playVideo(id: Long, uri: android.net.Uri) {
+        if (owner == id) return
+        owner = id; firstFrame = false
+        player.setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+        player.prepare(); player.play()
+    }
+
+    fun playMotion(id: Long, ctx: android.content.Context, uri: android.net.Uri, offset: Long) {
+        owner = id; firstFrame = false
+        player.setMediaSource(com.eagalts.still.media.Motion.source(ctx, uri, offset))
+        player.prepare(); player.play()
+    }
+
+    fun stopMotion(id: Long) { if (owner == id) stop() }
+
+    fun stop() {
+        if (owner == -1L) return
+        owner = -1L; firstFrame = false
+        player.stop(); player.clearMediaItems()
+    }
+
+    fun toggle() { if (player.isPlaying) player.pause() else player.play() }
+    fun seek(ms: Long) = player.seekTo(ms)
+    fun position(): Long = player.currentPosition
+    fun duration(): Long = player.duration.takeIf { it > 0 } ?: 1L
+    fun release() { player.release(); surface = null }
 }
 
 @Composable

@@ -340,6 +340,15 @@ class FeedUiTest {
         assertEquals("спросил второй раз", null, still.askManage)
     }
 
+    /** Видео в просмотре запускается само: появляется полоса времени с паузой. */
+    @Test fun videoStartsByItselfWithTimeBar() {
+        show()
+        rule.onNodeWithTag("tile-200").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        // снимок экрана тут не делаем: видеоповерхность (TextureView) Robolectric в картинку не рисует
+        rule.onNodeWithTag("video-bar").assertExists()
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

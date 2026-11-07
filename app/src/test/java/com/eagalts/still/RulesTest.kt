@@ -129,6 +129,22 @@ class RulesTest {
         assertEquals(Hue.BLACK, Hue.of(android.graphics.Color.rgb(10, 10, 12)))
     }
 
+    @Test fun motionPhotoLengthFromXmp() {
+        // новый формат Pixel: контейнер с элементом MotionPhoto
+        val xmp = """<x:xmpmeta><rdf:Description GCamera:MotionPhoto="1"><Container:Directory><rdf:Seq>
+            <rdf:li><Container:Item Item:Mime="image/jpeg" Item:Semantic="Primary" Item:Length="0" Item:Padding="0"/></rdf:li>
+            <rdf:li><Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="2345678"/></rdf:li>
+            </rdf:Seq></Container:Directory></rdf:Description></x:xmpmeta>"""
+        assertEquals(2345678L, com.eagalts.still.media.Motion.videoLength(xmp))
+        // атрибуты в другом порядке
+        assertEquals(42L, com.eagalts.still.media.Motion.videoLength("""<Container:Item Item:Length="42" Item:Semantic="MotionPhoto" Item:Mime="video/mp4"/>"""))
+        // старый формат
+        assertEquals(1000L, com.eagalts.still.media.Motion.videoLength("""GCamera:MicroVideo="1" GCamera:MicroVideoOffset="1000""""))
+        // обычное фото
+        assertEquals(null, com.eagalts.still.media.Motion.videoLength("<x:xmpmeta/>"))
+        assertEquals(null, com.eagalts.still.media.Motion.videoLength(null))
+    }
+
     @Test fun crashTextHasNoPaths() {
         val s = CrashReporter.scrub("java.io.FileNotFoundException: /storage/emulated/0/DCIM/Camera/PXL_1.jpg (content://media/external/images/1)")
         assertFalse("/storage" in s || "PXL" in s || "media/external" in s)

@@ -35,6 +35,7 @@ object Icons {
     val Search = line("search", "M10.5 4a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13z", "M20 20l-4.6-4.6")
     val Check = line("check", "M5 12.5l4.5 4.5L19 7.5")
     val Play = line("play", "M7.5 5.2v13.6a.8.8 0 0 0 1.2.7l10.6-6.8a.8.8 0 0 0 0-1.4L8.7 4.5a.8.8 0 0 0-1.2.7z", fill = true)
+    val Pause = line("pause", "M8.5 5.5v13", "M15.5 5.5v13")
     val Pin = line("pin", "M12 16.5V21", "M8.5 3.5h7", "M10 3.5v5l-3.5 4.5v1.5h11V13L14 8.5v-5")
     val Restore = line("restore", "M4 12a8 8 0 1 0 2.34-5.66", "M4 4v4.5h4.5")
     /** «Ещё такие»: кадр и его отражения. */

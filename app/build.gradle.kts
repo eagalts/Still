@@ -12,8 +12,8 @@ android {
         applicationId = "com.eagalts.still"
         minSdk = 29
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
     }
 
     // Ключ и пароли в git не лежат: ~/.gradle/gradle.properties (still.storePassword и т. д.)
@@ -72,6 +72,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // «Поделиться» без места съёмки: чистка EXIF/XMP в копии
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // видео и живые фото — только в просмотре: плеер создаётся при открытии и освобождается при закрытии
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
