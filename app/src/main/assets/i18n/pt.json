@@ -41,7 +41,6 @@
  "Уйдёт в Поток через {0} дн.": "Vai para o Fluxo em {0} d",
  "синее летом 2023 вечером": "azul verão 2023 noite",
  "Удалять без лишних вопросов": "Excluir sem perguntas",
- "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "O Android pede confirmação a cada exclusão. Permita que o Still gerencie mídia — é uma configuração única. As fotos continuam indo para a lixeira por 30 dias.",
  "Разрешить": "Permitir",
  "Не сейчас": "Agora não",
  "Без данных камеры": "Sem dados da câmera",
@@ -54,5 +53,6 @@
  "в. д.": "L",
  "з. д.": "O",
  "Место не записано": "Local não registrado",
- "Android не удалил кадр": "O Android não excluiu a foto"
+ "Android не удалил кадр": "O Android não excluiu a foto",
+ "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "O Android pede confirmação a cada exclusão. Nas configurações que vão abrir, ative “Permitir que o app gerencie mídia” — só uma vez. As fotos continuam indo para a lixeira por 30 dias."
 }

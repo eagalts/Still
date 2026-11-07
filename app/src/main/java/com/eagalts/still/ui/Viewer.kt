@@ -662,7 +662,7 @@ class Playback(ctx: android.content.Context) {
 
 @Composable
 private fun ChromeButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Box(Modifier.size(52.dp).bouncy(0.82f, onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(52.dp).testTag("viewer-$label").bouncy(0.82f, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = Color.White, modifier = Modifier.size(24.dp))
     }
 }

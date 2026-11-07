@@ -41,7 +41,6 @@
  "Уйдёт в Поток через {0} дн.": "Part dans le Flux dans {0} j",
  "синее летом 2023 вечером": "bleu été 2023 soir",
  "Удалять без лишних вопросов": "Supprimer sans confirmation",
- "Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней.": "Android demande de confirmer chaque suppression. Autorisez Still à gérer les médias : un réglage unique. Les photos vont toujours à la corbeille pendant 30 jours.",
  "Разрешить": "Autoriser",
  "Не сейчас": "Pas maintenant",
  "Без данных камеры": "Aucune donnée d'appareil",
@@ -54,5 +53,6 @@
  "в. д.": "E",
  "з. д.": "O",
  "Место не записано": "Lieu non enregistré",
- "Android не удалил кадр": "Android n'a pas supprimé la photo"
+ "Android не удалил кадр": "Android n'a pas supprimé la photo",
+ "Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней.": "Android demande de confirmer chaque suppression. Dans les réglages qui vont s'ouvrir, activez « Autoriser la gestion des médias » — une seule fois. Les photos vont toujours à la corbeille pendant 30 jours."
 }

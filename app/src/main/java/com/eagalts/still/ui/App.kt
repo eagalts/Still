@@ -83,8 +83,10 @@ fun StillApp(s: Still, dark: Boolean, onAsk: () -> Unit, feedController: FeedCon
                             BottomLayer(s, ctl)
                         }
                         MarkSheet(s, ctl)
-                        ManageSheet(s)
                         Viewer(s, ctl)
+                        // поверх всего, включая просмотр: раньше шторка открывалась под кадром, и корзина
+                        // в просмотре выглядела так, будто не делает ничего
+                        ManageSheet(s)
                     }
                 }
             }
@@ -188,7 +190,7 @@ private fun ManageSheet(s: Still) {
             Text(t("Удалять без лишних вопросов"), color = p.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
             Spacer(Modifier.height(8.dp))
             Text(
-                t("Android просит подтверждать каждое удаление. Разреши Still управлять медиафайлами — это один раз в настройках. Фото всё так же уходят в корзину на 30 дней."),
+                t("Android просит подтверждать каждое удаление. В настройках, которые сейчас откроются, включи переключатель «Разрешить управлять медиафайлами» — это один раз. Фото всё так же уходят в корзину на 30 дней."),
                 color = p.muted, fontSize = 15.sp, lineHeight = 21.sp, fontFamily = UiFont,
             )
             Spacer(Modifier.height(20.dp))

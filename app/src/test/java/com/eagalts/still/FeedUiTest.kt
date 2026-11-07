@@ -464,6 +464,26 @@ class FeedUiTest {
         assertEquals(4, still.selected().size)
     }
 
+    /** Корзина в просмотре без выданного доступа: просмотр остаётся открытым, сверху шторка про доступ. */
+    @Test fun deleteInViewerKeepsViewerOpen() {
+        still.canManage = { false }
+        show()
+        rule.onNodeWithTag("tile-300").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        rule.onNodeWithTag("viewer-Удалить").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        assertTrue("шторка не появилась", still.askManage != null)
+        assertTrue("просмотр закрылся сам", still.viewing != null)
+        // шторка видна поверх кадра: в центре кнопки «Разрешить» — её цвет, а не пиксели фото
+        val b = shot("viewer-delete")
+        val r = rule.onNodeWithTag("manage-allow").fetchSemanticsNode().boundsInRoot
+        val px = b.getPixel(r.center.x.toInt(), r.center.y.toInt())
+        val accent = com.eagalts.still.ui.LightPalette.accent
+        val want = android.graphics.Color.rgb((accent.red * 255).toInt(), (accent.green * 255).toInt(), (accent.blue * 255).toInt())
+        assertTrue("шторку закрывает просмотр", kotlin.math.abs(android.graphics.Color.red(px) - android.graphics.Color.red(want)) < 30 &&
+            kotlin.math.abs(android.graphics.Color.blue(px) - android.graphics.Color.blue(want)) < 30)
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {
