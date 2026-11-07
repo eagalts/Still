@@ -12,8 +12,8 @@ android {
         applicationId = "com.eagalts.still"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6"
+        versionCode = 8
+        versionName = "0.1.7"
     }
 
     // Ключ и пароли в git не лежат: ~/.gradle/gradle.properties (still.storePassword и т. д.)

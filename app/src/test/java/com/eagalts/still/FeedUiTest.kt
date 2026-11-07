@@ -431,6 +431,28 @@ class FeedUiTest {
         rule.mainClock.autoAdvance = true
     }
 
+    /** Как у живого человека: первый палец уже поехал (лента едет), второй касается позже — это щипок. */
+    @Test fun pinchWorksWhenSecondFingerLandsLate() {
+        val many = items() + (0 until 600).map { mk(10_000L + it, now - (60L + it) * day / 3) }
+        still = Still(rule.activity, FakeLibrary(many.sortedByDescending { it.taken }), Index(null), MainScope(), now = { now })
+        still.access = Access.FULL
+        show()
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        val c = box.center; val w = box.width
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(0, androidx.compose.ui.geometry.Offset(c.x - w * 0.3f, c.y))
+            moveBy(0, androidx.compose.ui.geometry.Offset(0f, -40f))          // палец поехал раньше второго
+            down(1, androidx.compose.ui.geometry.Offset(c.x + w * 0.3f, c.y - 40f))
+            for (i in 1..12) {
+                moveTo(0, androidx.compose.ui.geometry.Offset(c.x - w * (0.3f - 0.02f * i), c.y - 40f))
+                moveTo(1, androidx.compose.ui.geometry.Offset(c.x + w * (0.3f - 0.02f * i), c.y - 40f))
+            }
+            up(0); up(1)
+        }
+        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+        assertTrue("щипок не распознан: столбцов ${still.feed.cols}", still.feed.cols > 3)
+    }
+
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }
 
     @Test fun tapOnStackFansItOut() {

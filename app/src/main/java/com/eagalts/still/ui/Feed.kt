@@ -219,8 +219,31 @@ fun FeedScreen(s: Still, ctl: FeedController) {
      * меняется, меняется и масштаб — в тот же кадр, и глаз прыжка не видит. Кадр под пальцами остаётся под ними.
      */
     val vcols = remember { Animatable(feed.cols.toFloat()) }
-    val panX = remember { Animatable(0f) }
     var pivot by remember { mutableStateOf(Offset.Zero) }
+    // сдвиг по горизонтали при смене ступени: ставится в том же кадре, что и раскладка, потом мягко уходит в 0
+    val panX = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var panJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    /** Держать кадр под пальцами: докрутка и сдвиг — синхронно с новой раскладкой (без кадра «не того места»). */
+    fun applyAnchor(a: Triple<Long, Float, Float>, cells: List<Cell>, cols: Int) {
+        val (key, fx, fy) = a
+        val idx = cells.indexOfFirst { it.key == key }
+        val lo = ctl.grid.layoutInfo
+        if (idx < 0 || lo.viewportSize.width <= 0) return
+        val w = lo.viewportSize.width.toFloat(); val h = lo.viewportSize.height.toFloat()
+        val gap = with(density) { gapFor(cols).toPx() }
+        val tile = (w - gap * (cols - 1)) / cols
+        // поле сверху — как у новой раскладки: под линзой полэкрана, иначе под капсулу фильтра
+        val padTopPx = with(density) { ((top + 56.dp) * capsule.coerceIn(0f, 1f)).toPx() }
+        val before = if (Lens.strengthFor(cols) > 0f) maxOf(padTopPx, (h - tile) / 2f) else padTopPx
+        ctl.grid.requestScrollToItem(idx, 0)
+        ctl.grid.dispatchRawDelta(-(pivot.y - before - fy * tile))
+        // по горизонтали кадр переезжает в другой столбец — компенсируем сдвигом и мягко отпускаем
+        val k = cols / vcols.value
+        val x = (idx % cols) * (tile + gap) + fx * tile
+        panJob?.cancel()
+        panX.floatValue = -(x - pivot.x) * k
+        panJob = scope.launch { androidx.compose.animation.core.animate(panX.floatValue, 0f, animationSpec = spring(1f, 160f)) { v, _ -> panX.floatValue = v } }
+    }
     // кадр под пальцами и где на нём пальцы (доли ширины и высоты) — его держим на месте при смене раскладки
     var anchor by remember { mutableStateOf<Triple<Long, Float, Float>?>(null) }
     // ступень сменилась не щипком — виртуальные столбцы встают на неё же (масштаб 1)
@@ -267,33 +290,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     }
     // лента открывается в конце — на самом свежем; если были в конце, новый кадр не уводит вверх
     LaunchedEffect(Unit) { snapshotFlow { ctl.grid.canScrollForward }.collect { ctl.atEnd = !it } }
+    var prevCols by remember { mutableStateOf(feed.cols) }
     LaunchedEffect(feed.gen) {
         val fresh = ctl.shownFilter != s.filter || !ctl.placed
-        if (anchor == null && feed.cells.isNotEmpty() && (fresh || ctl.atEnd)) {
+        val zoomed = feed.cols != prevCols; prevCols = feed.cols
+        // смена ступени — не повод уезжать в конец ленты: кадр под пальцами держит applyAnchor
+        if (anchor == null && !zoomed && !ctl.pinching && feed.cells.isNotEmpty() && (fresh || ctl.atEnd)) {
             ctl.grid.requestScrollToItem(feed.cells.size - 1)
             ctl.placed = true; ctl.shownFilter = s.filter
         }
-        anchor?.let { (key, fx, fy) ->
-            val idx = feed.cells.indexOfFirst { it.key == key }
-            val lo = ctl.grid.layoutInfo
-            if (idx >= 0 && lo.viewportSize.width > 0) {
-                val cols = feed.cols
-                val w = lo.viewportSize.width.toFloat(); val h = lo.viewportSize.height.toFloat()
-                val gap = with(density) { gapFor(cols).toPx() }
-                val tile = (w - gap * (cols - 1)) / cols
-                // поле сверху — как у новой раскладки: под линзой полэкрана, иначе под капсулу фильтра
-                val padTopPx = with(density) { ((top + 56.dp) * capsule.coerceIn(0f, 1f)).toPx() }
-                val before = if (Lens.strengthFor(cols) > 0f) maxOf(padTopPx, (h - tile) / 2f) else padTopPx
-                ctl.grid.requestScrollToItem(idx, 0)
-                ctl.grid.dispatchRawDelta(-(pivot.y - before - fy * tile))
-                // по горизонтали кадр переезжает в другой столбец — компенсируем сдвигом и мягко отпускаем
-                val k = cols / vcols.value
-                val x = (idx % cols) * (tile + gap) + fx * tile
-                panX.snapTo(-(x - pivot.x) * k)
-                launch { panX.animateTo(0f, spring(1f, 160f)) }
-            }
-            anchor = null
-        }
+        anchor?.let { applyAnchor(it, feed.cells, feed.cols); anchor = null }
     }
 
     // выбор протягиванием: якорь, снимок выбора на старте, режим (выделять или снимать)
@@ -325,6 +331,8 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                         }
                         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         s.zoomTo(target)
+                        // раскладка сменилась сразу (обычный масштаб) — держим кадр в этом же кадре, не ждём эффекта
+                        if (s.feed.cols == target) anchor?.let { applyAnchor(it, s.feed.cells, target); anchor = null }
                     }
                     var selecting = false
                     var autoJob: kotlinx.coroutines.Job? = null
@@ -412,15 +420,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                             return false
                         }
                         if (!moved && (c.position - down.position).getDistance() > slop) moved = true
-                        // палец поехал — это прокрутка сетки; дальше жест не наш
-                        return moved || c.isConsumed
+                        // палец поехал — это прокрутка сетки (её ведёт сама сетка), но жест слушаем дальше:
+                        // второй палец может коснуться позже — тогда это щипок
+                        return false
                     }
                     // долгое нажатие — по таймеру: неподвижный палец событий не шлёт
                     val early = withTimeoutOrNull(longPress) {
                         while (true) {
                             val ev = awaitPointerEvent(PointerEventPass.Initial)
                             if (step(ev)) return@withTimeoutOrNull true
-                            if (pinching) return@withTimeoutOrNull false
+                            if (pinching || moved) return@withTimeoutOrNull false
                         }
                         @Suppress("UNREACHABLE_CODE") false
                     }
@@ -453,7 +462,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             modifier = Modifier.fillMaxSize().nestedScroll(physics).graphicsLayer {
                 val k = (feed.cols / vcols.value).coerceIn(0.35f, 3f)
                 scaleX = k; scaleY = k
-                translationX = panX.value
+                translationX = panX.floatValue
                 transformOrigin = TransformOrigin(
                     (pivot.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),

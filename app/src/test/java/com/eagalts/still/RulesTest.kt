@@ -74,6 +74,28 @@ class RulesTest {
         assertEquals(3, Stacks.build(listOf(a, b, c)) { 0L }.size)
     }
 
+    /** Похожие кадры в окне 5–10 минут — одна стопка; чужой снимок между ними её не рвёт. */
+    @Test fun similarShotsMinutesApartStackEvenWithOtherShotBetween() {
+        val a = item(1, taken = now); val other = item(2, taken = now - 2 * 60_000); val a2 = item(3, taken = now - 7 * 60_000)
+        val far = item(4, taken = now - 25 * 60_000)
+        val hashes = mapOf(1L to 0x0F0F0F0F0F0F0F0FL, 2L to 0x7070707070707070L, 3L to 0x0F0F0F0F0F0F0F0EL, 4L to 0x0F0F0F0F0F0F0F0FL)
+        val e = Stacks.build(listOf(a, other, a2, far)) { hashes[it] ?: 0L }
+        val stack = e.first { it.stacked }
+        assertEquals(setOf(1L, 3L), stack.members.map { it.id }.toSet())
+        // через 25 минут — уже другой момент, даже если кадр такой же
+        assertTrue(e.any { !it.stacked && it.cover.id == 4L })
+        assertTrue(e.any { !it.stacked && it.cover.id == 2L })
+    }
+
+    /** При заметной разнице отпечатков складываем, только если совпадает и основной цвет. */
+    @Test fun looserMatchNeedsSameColor() {
+        val a = item(1, taken = now); val b = item(2, taken = now - 5 * 60_000)
+        val h = mapOf(1L to 0L.inv(), 2L to (0L.inv() xor 0x3FFL))   // 10 бит разницы
+        val blue = android.graphics.Color.rgb(40, 90, 220); val red = android.graphics.Color.rgb(220, 40, 40)
+        assertEquals(1, Stacks.build(listOf(a, b), color = { blue }) { h[it]!! }.size)
+        assertEquals(2, Stacks.build(listOf(a, b), color = { if (it == 1L) blue else red }) { h[it]!! }.size)
+    }
+
     @Test fun videoAndOtherSourcesNeverStack() {
         val e = Stacks.build(listOf(item(1), item(2, video = true, taken = now - 100), item(3, Source.SCREENSHOT, taken = now - 200))) { 0L }
         assertEquals(3, e.size)

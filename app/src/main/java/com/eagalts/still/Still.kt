@@ -132,11 +132,31 @@ class Still(
             if (filter == Filter.Trash) trashed = withContext(Dispatchers.IO) { lib.load(trashed = true) }
             loaded = true
             rebuild()
+            printMissing()
             if (reloadAgain) { reloadAgain = false; reload(force = true) }
         }
     }
 
     private var rebuildJob: Job? = null
+    private var printJob: Job? = null
+
+    /**
+     * Отпечатки для стопок — по событию загрузки, один раз на кадр: свежие первыми, из системных миниатюр
+     * (160 px). Лента пересобирается порциями — стопки складываются на глазах. Посчитанное хранится в индексе.
+     */
+    private fun printMissing() {
+        if (printJob?.isActive == true) return
+        val todo = all.filter { !it.video && !index.hasPrint(it.id) }
+        if (todo.isEmpty()) return
+        printJob = scope.launch {
+            // пересборка — после первой порции (видимое сверху складывается сразу), дальше реже и в конце
+            todo.chunked(150).forEachIndexed { i, chunk ->
+                chunk.forEach { runCatching { thumbs.ensurePrint(it) } }
+                if (i == 0 || i % 8 == 7) rebuild()
+            }
+            rebuild()
+        }
+    }
 
     fun rebuild() {
         val f = filter; val items = all; val kept = index.keptIds(); val cols = columns; val exp = expanded
@@ -162,7 +182,7 @@ class Still(
             is Filter.Search -> items.filter { f.query.matches(it, index.color(it.id)) }
         }
         // стопки — в ленте и альбомах; в поиске и корзине каждый кадр сам по себе
-        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::hash)
+        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::color, index::hash)
         else base.map { Entry(it, listOf(it)) }
         // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
         val entries = newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }
@@ -214,7 +234,17 @@ class Still(
         } else rebuild()
     }
 
-    fun zoomTo(c: Int) { if (c != columns) { columns = c; rebuild() } }
+    /**
+     * Смена ступени. Пока подписей нет (обычный масштаб), ячейки от числа столбцов не зависят — раскладка
+     * меняется сразу, в этом же кадре, без пересборки ленты (посреди щипка её нельзя ждать).
+     */
+    fun zoomTo(c: Int) {
+        if (c == columns) return
+        val old = columns
+        columns = c
+        if (levelOf(old) == Level.NONE && levelOf(c) == Level.NONE && feed.cols == old) feed = Feed(feed.cells, c, feed.gen + 1)
+        else rebuild()
+    }
 
     fun toggleStack(key: Long) {
         expanded = if (key in expanded) expanded - key else expanded + key

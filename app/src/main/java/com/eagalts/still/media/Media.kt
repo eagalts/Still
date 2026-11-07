@@ -80,41 +80,61 @@ class Entry(val cover: MediaItem, val members: List<MediaItem>) {
 }
 
 /**
- * Правило 2 — «лента моментов». Соседние по времени кадры одного источника складываются в стопку, если это
- * серия (≤ [BURST_MS] между кадрами) или почти одинаковые снимки (≤ [NEAR_MS] и разница dHash ≤ [NEAR_BITS]).
+ * Правило 2 — «лента моментов». Кадры одного источника складываются в стопку, если это серия (≤ [BURST_MS]
+ * между кадрами) или почти одинаковые снимки в окне [NEAR_MS]: отпечатки (dHash) различаются не больше чем на
+ * [NEAR_BITS] бит, а при заметной разнице ещё и основной цвет совпадает. Кадр сравнивается не только с соседом,
+ * а с несколькими предыдущими в окне — чужой снимок между двумя похожими стопку не рвёт.
  * Видео в стопки не идут. Лучший — самый тяжёлый файл: на одном сюжете больший JPEG = больше деталей (резче).
  */
 object Stacks {
     const val BURST_MS = 2_000L
-    const val NEAR_MS = 90_000L
-    const val NEAR_BITS = 6
+    const val NEAR_MS = 10 * 60_000L
+    const val NEAR_BITS = 12
+    /** До этой разницы отпечатков цвет не проверяем — кадры и так почти одинаковые. */
+    const val SURE_BITS = 6
+    private const val LOOK_BACK = 12
 
-    /** [items] — по убыванию времени съёмки. [hash] — 0, если ещё не посчитан. */
-    fun build(items: List<MediaItem>, hash: (Long) -> Long): List<Entry> {
-        val out = ArrayList<Entry>(items.size)
-        var run = ArrayList<MediaItem>()
-        fun flush() {
-            if (run.isEmpty()) return
-            out += Entry(run.maxBy { it.size }, run)
-            run = ArrayList()
+    /** [items] — по убыванию времени съёмки. [hash] — 0, если ещё не посчитан; [color] — null, если не посчитан. */
+    fun build(items: List<MediaItem>, color: (Long) -> Int? = { null }, hash: (Long) -> Long): List<Entry> {
+        val n = items.size
+        val parent = IntArray(n) { it }
+        fun find(x: Int): Int { var r = x; while (parent[r] != r) { parent[r] = parent[parent[r]]; r = parent[r] }; return r }
+        val hashes = LongArray(n) { hash(items[it].id) }
+        for (i in 1 until n) {
+            val b = items[i]
+            if (b.video) continue
+            var best = -1; var bestD = Int.MAX_VALUE
+            var j = i - 1
+            while (j >= 0 && i - j <= LOOK_BACK) {
+                val a = items[j]
+                if (kotlin.math.abs(a.taken - b.taken) > NEAR_MS) break
+                val d = distance(a, b, hashes[j], hashes[i], color)
+                if (d >= 0 && d < bestD) { best = j; bestD = d }
+                j--
+            }
+            if (best >= 0) parent[find(i)] = find(best)
         }
-        for (it in items) {
-            val prev = run.lastOrNull()
-            if (prev != null && !joins(prev, it, hash)) flush()
-            run += it
-        }
-        flush()
-        return out
+        // стопка встаёт на место своего самого свежего кадра
+        val groups = LinkedHashMap<Int, ArrayList<MediaItem>>()
+        for (i in 0 until n) groups.getOrPut(find(i)) { ArrayList() } += items[i]
+        return groups.values.map { m -> Entry(m.maxBy { it.size }, m) }
     }
 
-    internal fun joins(a: MediaItem, b: MediaItem, hash: (Long) -> Long): Boolean {
-        if (a.video || b.video || a.source != b.source) return false
-        val dt = kotlin.math.abs(a.taken - b.taken)
-        if (dt <= BURST_MS) return true
-        if (dt > NEAR_MS) return false
-        val ha = hash(a.id); val hb = hash(b.id)
-        return ha != 0L && hb != 0L && java.lang.Long.bitCount(ha xor hb) <= NEAR_BITS
+    /** −1 — не складываются; иначе «насколько похожи» (меньше — ближе), серия — 0. */
+    internal fun distance(a: MediaItem, b: MediaItem, ha: Long, hb: Long, color: (Long) -> Int?): Int {
+        if (a.video || b.video || a.source != b.source) return -1
+        if (kotlin.math.abs(a.taken - b.taken) <= BURST_MS) return 0
+        if (ha == 0L || hb == 0L) return -1
+        val d = java.lang.Long.bitCount(ha xor hb)
+        if (d > NEAR_BITS) return -1
+        if (d > SURE_BITS) {
+            val ca = color(a.id); val cb = color(b.id)
+            if (ca == null || cb == null || Hue.of(ca) != Hue.of(cb)) return -1
+        }
+        return d
     }
+
+    internal fun joins(a: MediaItem, b: MediaItem, hash: (Long) -> Long): Boolean = distance(a, b, hash(a.id), hash(b.id)) { null } >= 0
 }
 
 /**
