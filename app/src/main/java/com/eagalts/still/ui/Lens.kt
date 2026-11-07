@@ -42,6 +42,6 @@ object Lens {
         out[SHADE] = (kk * 0.62f * a * a).coerceIn(0f, 0.72f)
     }
 
-    /** Сила линзы для числа столбцов: крупно — полная, на 5 — половина, месяцы и годы — плоская сетка. */
-    fun strengthFor(cols: Int): Float = when { cols <= 3 -> 1f; cols <= 5 -> 0.5f; else -> 0f }
+    /** Сила линзы для числа столбцов: крупно — полная, на 5 — половина, с 8 — плоская сетка. */
+    fun strengthFor(cols: Int): Float = com.eagalts.still.ui.Zoom.lens(cols.toFloat())
 }

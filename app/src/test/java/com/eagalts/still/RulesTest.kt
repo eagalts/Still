@@ -152,6 +152,18 @@ class RulesTest {
         assertEquals("2", com.eagalts.still.media.DetailsLoader.shutter(2.0))
     }
 
+    @Test fun pinchStepsAreContinuousAndStable() {
+        val Z = com.eagalts.still.ui.Zoom
+        assertEquals(3, Z.nearest(3.2f)); assertEquals(5, Z.nearest(4.6f)); assertEquals(13, Z.nearest(20f))
+        // раскладка — ступень не крупнее пальцев: сетка рисуется крупнее себя, края заполнены
+        assertEquals(4, Z.next(3, 3.5f)); assertEquals(8, Z.next(3, 7.2f)); assertEquals(2, Z.next(8, 1.9f))
+        // у самой ступени раскладка не дребезжит
+        assertEquals(5, Z.next(5, 5.1f)); assertEquals(5, Z.next(5, 4.9f))
+        // линза слабеет плавно
+        assertEquals(1f, Z.lens(3f), 0.001f); assertEquals(0.5f, Z.lens(5f), 0.001f); assertEquals(0f, Z.lens(8f), 0.001f)
+        assertTrue(Z.lens(4f) in 0.5f..1f)
+    }
+
     @Test fun crashTextHasNoPaths() {
         val s = CrashReporter.scrub("java.io.FileNotFoundException: /storage/emulated/0/DCIM/Camera/PXL_1.jpg (content://media/external/images/1)")
         assertFalse("/storage" in s || "PXL" in s || "media/external" in s)

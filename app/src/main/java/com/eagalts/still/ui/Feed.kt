@@ -128,6 +128,8 @@ class FeedController(val grid: LazyGridState) {
     var placed = false
     var shownFilter: Filter? = null
     var atEnd = true
+    /** Идёт щипок: силу линзы ведут пальцы. */
+    var pinching = false
 
     // ——— линза ———
     /** Сила линзы сейчас (анимируется: выбор, отдаление). Быстрая прокрутка ослабляет её ещё — см. [lensNow]. */
@@ -211,15 +213,23 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     val capsule by animateFloatAsState(if (s.filter != null) 1f else 0f, fineSpring(0.86f, 420f), label = "capsule")
     val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
 
-    // щипок: сетка тянется за пальцами, а на смене ступени новая раскладка подхватывает масштаб и доезжает до 1
-    val zoom = remember { Animatable(1f) }
+    /*
+     * Непрерывный щипок. Под пальцами живёт «виртуальное» число столбцов [vcols] — оно меняется плавно.
+     * Сетка раскладывается на ближайшую ступень, а рисуется с масштабом «ступень / виртуальное»: когда раскладка
+     * меняется, меняется и масштаб — в тот же кадр, и глаз прыжка не видит. Кадр под пальцами остаётся под ними.
+     */
+    val vcols = remember { Animatable(feed.cols.toFloat()) }
+    val panX = remember { Animatable(0f) }
     var pivot by remember { mutableStateOf(Offset.Zero) }
-    var anchor by remember { mutableStateOf<Pair<Long, Float>?>(null) }   // кадр под пальцами и его доля по высоте
-    var pendingScale by remember { mutableStateOf<Float?>(null) }
+    // кадр под пальцами и где на нём пальцы (доли ширины и высоты) — его держим на месте при смене раскладки
+    var anchor by remember { mutableStateOf<Triple<Long, Float, Float>?>(null) }
+    // ступень сменилась не щипком — виртуальные столбцы встают на неё же (масштаб 1)
+    LaunchedEffect(feed.cols) { if (!ctl.pinching && !vcols.isRunning) vcols.snapTo(feed.cols.toFloat()) }
     // линза уступает, когда делаешь: выбор и отдаление выпрямляют её в обычную сетку
     ctl.fastUnit = with(density) { 48.dp.toPx() }
     val lensTarget = if (s.selection.isNotEmpty()) 0f else Lens.strengthFor(feed.cols)
     LaunchedEffect(lensTarget) {
+        if (ctl.pinching) return@LaunchedEffect   // во время щипка линзу ведут пальцы
         androidx.compose.animation.core.animate(ctl.lens, lensTarget, animationSpec = spring(1f, 260f)) { v, _ -> ctl.lens = v }
     }
     // фото под строкой состояния? тогда значки светлые и под ними тень; лента короче экрана — как обычно
@@ -263,18 +273,26 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             ctl.grid.requestScrollToItem(feed.cells.size - 1)
             ctl.placed = true; ctl.shownFilter = s.filter
         }
-        anchor?.let { (key, frac) ->
+        anchor?.let { (key, fx, fy) ->
             val idx = feed.cells.indexOfFirst { it.key == key }
-            if (idx >= 0) {
-                val tile = with(density) { (ctl.grid.layoutInfo.viewportSize.width / feed.cols).toFloat() }
+            val lo = ctl.grid.layoutInfo
+            if (idx >= 0 && lo.viewportSize.width > 0) {
+                val cols = feed.cols
+                val w = lo.viewportSize.width.toFloat(); val h = lo.viewportSize.height.toFloat()
+                val gap = with(density) { gapFor(cols).toPx() }
+                val tile = (w - gap * (cols - 1)) / cols
+                // поле сверху — как у новой раскладки: под линзой полэкрана, иначе под капсулу фильтра
+                val padTopPx = with(density) { ((top + 56.dp) * capsule.coerceIn(0f, 1f)).toPx() }
+                val before = if (Lens.strengthFor(cols) > 0f) maxOf(padTopPx, (h - tile) / 2f) else padTopPx
                 ctl.grid.requestScrollToItem(idx, 0)
-                ctl.grid.dispatchRawDelta(-(pivot.y - with(density) { top.toPx() } - frac * tile))
+                ctl.grid.dispatchRawDelta(-(pivot.y - before - fy * tile))
+                // по горизонтали кадр переезжает в другой столбец — компенсируем сдвигом и мягко отпускаем
+                val k = cols / vcols.value
+                val x = (idx % cols) * (tile + gap) + fx * tile
+                panX.snapTo(-(x - pivot.x) * k)
+                launch { panX.animateTo(0f, spring(1f, 160f)) }
             }
             anchor = null
-        }
-        pendingScale?.let { k ->
-            zoom.snapTo(k); pendingScale = null
-            zoom.animateTo(1f, spring(0.82f, 380f))
         }
     }
 
@@ -291,9 +309,23 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var moved = false
                     var pinching = false
-                    // одна ступень за щипок: новая раскладка доезжает пружиной, пальцы её не дёргают
-                    var stepped = false
                     var startSpan = 0f
+                    var startV = 0f
+                    // смена ступени: запомнить кадр под пальцами (по раскладке, а не по линзе) и где на нём пальцы
+                    fun step(target: Int) {
+                        val lo = ctl.grid.layoutInfo
+                        val info = lo.visibleItemsInfo.firstOrNull {
+                            val t = it.offset.y - lo.viewportStartOffset
+                            pivot.x >= it.offset.x && pivot.x < it.offset.x + it.size.width && pivot.y >= t && pivot.y < t + it.size.height
+                        } ?: lo.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.offset.y - lo.viewportStartOffset + it.size.height / 2f - pivot.y) }
+                        val cell = info?.let { ctl.cells.getOrNull(it.index) } as? Cell.Tile
+                        if (info != null && cell != null && anchor == null) {
+                            val t = info.offset.y - lo.viewportStartOffset
+                            anchor = Triple(cell.item.id, ((pivot.x - info.offset.x) / info.size.width).coerceIn(0f, 1f), ((pivot.y - t) / info.size.height).coerceIn(0f, 1f))
+                        }
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        s.zoomTo(target)
+                    }
                     var selecting = false
                     var autoJob: kotlinx.coroutines.Job? = null
                     var lastPos = down.position
@@ -329,8 +361,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                         if (pressed.isEmpty()) {
                             autoJob?.cancel()
                             if (selecting) { dragAnchor = -1; return true }
-                            // щипок не дотянули до ступени — сетка мягко возвращается
-                            if (pinching && !stepped) scope.launch { zoom.animateTo(1f, spring(0.8f, 500f)) }
+                            // отпустил — сетка доезжает до ближайшей ступени, линза — до её силы
+                            if (pinching) {
+                                val target = Zoom.nearest(vcols.value)
+                                if (target != s.columns) step(target)
+                                ctl.pinching = false
+                                scope.launch { vcols.animateTo(target.toFloat(), spring(0.85f, 320f)) }
+                                scope.launch {
+                                    androidx.compose.animation.core.animate(ctl.lens, if (s.selection.isNotEmpty()) 0f else Lens.strengthFor(target), animationSpec = spring(1f, 260f)) { v, _ -> ctl.lens = v }
+                                }
+                            }
                             if (!moved && !pinching && ev.changes.none { it.isConsumed }) {
                                 ctl.hit(down.position)?.let { tap(s, ctl, it.index) }
                             }
@@ -339,27 +379,17 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                         if (pressed.size >= 2 && !selecting) {
                             val a = pressed[0].position; val b = pressed[1].position
                             val span = (a - b).getDistance()
-                            if (!pinching) { pinching = true; startSpan = span; pivot = (a + b) / 2f }
-                            ev.changes.forEach { it.consume() }
-                            if (stepped) return false
-                            val k = span / startSpan.coerceAtLeast(1f)
-                            scope.launch { zoom.snapTo(k.coerceIn(0.7f, 1.45f)) }
-                            val i = ColumnSteps.indexOf(s.columns)
-                            val next = when { k > 1.28f && i > 0 -> i - 1; k < 0.78f && i < ColumnSteps.size - 1 -> i + 1; else -> i }
-                            if (next != i && anchor == null) {
-                                val h = ctl.hit(pivot)
-                                val cell = h?.let { ctl.cells.getOrNull(it.index) } as? Cell.Tile
-                                if (cell != null) {
-                                    val tTop = h.offset.y - ctl.grid.layoutInfo.viewportStartOffset
-                                    anchor = cell.item.id to ((pivot.y - tTop) / h.size.height).coerceIn(0f, 1f)
-                                }
-                                val ratio = s.columns.toFloat() / ColumnSteps[next]
-                                // новая плитка в ratio раз крупнее: начинаем с масштаба, на котором она совпадает со старой
-                                pendingScale = (k / ratio).coerceIn(0.5f, 2f)
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                s.zoomTo(ColumnSteps[next])
-                                stepped = true
+                            if (!pinching) {
+                                pinching = true; ctl.pinching = true
+                                startSpan = span; pivot = (a + b) / 2f; startV = vcols.value
                             }
+                            ev.changes.forEach { it.consume() }
+                            // пальцы шире — столбцов меньше; за пределами 2 и 13 — с сопротивлением
+                            val v = Zoom.rubber(startV * startSpan.coerceAtLeast(1f) / span.coerceAtLeast(1f))
+                            scope.launch { vcols.snapTo(v) }
+                            ctl.lens = if (s.selection.isNotEmpty()) 0f else Zoom.lens(v)
+                            val target = Zoom.next(s.columns, v)
+                            if (target != s.columns) step(target)
                             return false
                         }
                         if (pinching) return false
@@ -421,8 +451,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             columns = GridCells.Fixed(feed.cols),
             state = ctl.grid,
             modifier = Modifier.fillMaxSize().nestedScroll(physics).graphicsLayer {
-                val k = zoom.value.coerceIn(0.4f, 2.5f)
+                val k = (feed.cols / vcols.value).coerceIn(0.35f, 3f)
                 scaleX = k; scaleY = k
+                translationX = panX.value
                 transformOrigin = TransformOrigin(
                     (pivot.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
@@ -888,4 +919,42 @@ private fun androidx.compose.foundation.layout.BoxScope.PeriodLabel(label: Strin
 private object CenterSnap : androidx.compose.foundation.gestures.snapping.SnapPosition {
     override fun position(layoutSize: Int, itemSize: Int, beforeContentPadding: Int, afterContentPadding: Int, itemIndex: Int, itemCount: Int): Int =
         layoutSize / 2 - itemSize / 2 - beforeContentPadding
+}
+
+
+/** Ступени щипка и переходы между ними — в логарифмическом масштабе (как воспринимается размер). */
+object Zoom {
+    private val ln = ColumnSteps.map { kotlin.math.ln(it.toFloat()) }
+
+    fun nearest(v: Float): Int {
+        val l = kotlin.math.ln(v.coerceAtLeast(0.5f))
+        return ColumnSteps[ln.indices.minBy { kotlin.math.abs(ln[it] - l) }]
+    }
+
+    /**
+     * Ступень для раскладки во время щипка: всегда та, что мельче или равна пальцам (столбцов ≥ виртуальных), —
+     * тогда сетка рисуется крупнее своей раскладки и края экрана заполнены кадрами (ленивая сетка не рисует
+     * то, что за пределами экрана, и при уменьшении по краям были бы пустые поля). У самой ступени — небольшой
+     * запас, чтобы раскладка не дребезжала, когда пальцы стоят на границе.
+     */
+    fun next(current: Int, v: Float): Int {
+        fun ceilStep(x: Float) = ColumnSteps.firstOrNull { it >= x } ?: ColumnSteps.last()
+        val low = ceilStep(v * 0.95f); val high = ceilStep(v * 0.99f)
+        return if (current in low..high) current else high
+    }
+
+    /** За крайними ступенями — с сопротивлением. */
+    fun rubber(v: Float): Float {
+        val lo = ColumnSteps.first().toFloat(); val hi = ColumnSteps.last().toFloat()
+        // за крайними ступенями — с сопротивлением; сильно меньше 13 столбцов уменьшать нельзя (пустые края)
+        return when { v < lo -> lo - (lo - v) * 0.3f; v > hi -> hi + ((v - hi) * 0.15f).coerceAtMost(hi * 0.08f); else -> v }
+    }
+
+    /** Сила линзы плавно по виртуальным столбцам: полная до 3, половина на 5, нет с 8. */
+    fun lens(v: Float): Float = when {
+        v <= 3f -> 1f
+        v <= 5f -> 1f - 0.5f * (v - 3f) / 2f
+        v <= 8f -> 0.5f * (1f - (v - 5f) / 3f)
+        else -> 0f
+    }
 }

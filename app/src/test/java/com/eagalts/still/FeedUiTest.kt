@@ -11,6 +11,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -362,6 +363,72 @@ class FeedUiTest {
         rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
         rule.onNodeWithTag("info-panel").assertDoesNotExist()
         assertTrue("закрылся сам просмотр", still.viewing != null)
+    }
+
+    /**
+     * Непрерывный щипок: сводишь пальцы — сетка мельчает одним движением через ступени; кадр, на котором
+     * были пальцы, остаётся под ними.
+     */
+    @Test fun pinchFlowsThroughStepsKeepingThePhotoUnderFingers() {
+        // лента как у живого человека — сотни кадров, чтобы было куда держать кадр под пальцами
+        val many = items() + (0 until 600).map { mk(10_000L + it, now - (60L + it) * day / 3) }
+        still = Still(rule.activity, FakeLibrary(many.sortedByDescending { it.taken }), Index(null), MainScope(), now = { now })
+        still.access = Access.FULL
+        show()
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size / 2) }
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        val c = box.center
+        val before = rule.runOnIdle { ctl.hit(c)?.key }
+        rule.onNodeWithTag("feed").performTouchInput {
+            pinch(
+                androidx.compose.ui.geometry.Offset(c.x - width * 0.4f, c.y), androidx.compose.ui.geometry.Offset(c.x - width * 0.12f, c.y),
+                androidx.compose.ui.geometry.Offset(c.x + width * 0.4f, c.y), androidx.compose.ui.geometry.Offset(c.x + width * 0.12f, c.y),
+                600,
+            )
+        }
+        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+        // одним жестом — через несколько ступеней (3 → 4 → 5 → 6 → 8 → 10)
+        until { still.feed.cols >= 8 }
+        shot("pinch-end")
+        val lo = ctl.grid.layoutInfo
+        val under = lo.visibleItemsInfo.firstOrNull {
+            val t = it.offset.y - lo.viewportStartOffset
+            c.x >= it.offset.x && c.x < it.offset.x + it.size.width && c.y >= t && c.y < t + it.size.height
+        }
+        val near = lo.visibleItemsInfo.filter { kotlin.math.abs(it.offset.y - lo.viewportStartOffset + it.size.height / 2f - c.y) < it.size.height * 1.5f }.map { it.key }
+        assertTrue("кадр ушёл из-под пальцев: был $before, под пальцами ${under?.key}", before in near)
+    }
+
+    /** Кадры щипка для глаз (build/pinch-frames): сводим пальцы по шагам и рисуем каждый шаг. */
+    @Test fun pinchFrames() {
+        val many = items() + (0 until 600).map { mk(10_000L + it, now - (60L + it) * day / 3) }
+        still = Still(rule.activity, FakeLibrary(many.sortedByDescending { it.taken }), Index(null), MainScope(), now = { now })
+        still.access = Access.FULL
+        show()
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size / 2) }
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        val dir = File("build/pinch-frames").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        val c = box.center; val w = box.width
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(0, androidx.compose.ui.geometry.Offset(c.x - w * 0.42f, c.y)); down(1, androidx.compose.ui.geometry.Offset(c.x + w * 0.42f, c.y))
+        }
+        val n = 40
+        for (i in 1..n) {
+            // туда и обратно: 3 → 13 → 2 столбца одним касанием
+            val t = i / n.toFloat()
+            val half = if (t < 0.6f) w * (0.42f - 0.38f * (t / 0.6f)) else w * (0.04f + 0.44f * ((t - 0.6f) / 0.4f))
+            rule.onNodeWithTag("feed").performTouchInput {
+                moveTo(0, androidx.compose.ui.geometry.Offset(c.x - half, c.y)); moveTo(1, androidx.compose.ui.geometry.Offset(c.x + half, c.y))
+            }
+            repeat(2) { rule.mainClock.advanceTimeBy(16); org.robolectric.shadows.ShadowLooper.idleMainLooper(16, java.util.concurrent.TimeUnit.MILLISECONDS) }
+            val b = shot("x", settle = false)
+            File(dir, "%03d.png".format(i)).outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        rule.onNodeWithTag("feed").performTouchInput { up(0); up(1) }
+        rule.mainClock.autoAdvance = true
     }
 
     @Test fun darkFeed() { show(dark = true); shot("feed-dark") }

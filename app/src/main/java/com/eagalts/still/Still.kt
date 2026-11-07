@@ -57,8 +57,9 @@ class Feed(val cells: List<Cell>, val cols: Int, val gen: Int)
  */
 enum class Level { NONE, MONTHS, YEARS }
 
-val ColumnSteps = intArrayOf(2, 3, 5, 8, 13)
-fun levelOf(cols: Int) = when { cols <= 5 -> Level.NONE; cols <= 8 -> Level.MONTHS; else -> Level.YEARS }
+/** Ступени щипка: частые — каждая перескладка под пальцами маленькая. */
+val ColumnSteps = intArrayOf(2, 3, 4, 5, 6, 8, 10, 13)
+fun levelOf(cols: Int) = when { cols <= 5 -> Level.NONE; cols <= 10 -> Level.MONTHS; else -> Level.YEARS }
 
 enum class Access { NONE, PARTIAL, FULL }
 
