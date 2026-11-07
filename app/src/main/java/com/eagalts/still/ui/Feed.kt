@@ -129,6 +129,14 @@ class FeedController(val grid: LazyGridState) {
     var placed = false
     var shownFilter: Filter? = null
     var atEnd = true
+    /** Размер плитки в пикселях — считается один раз на раскладку, а не в каждой плитке. */
+    var tilePx = 0
+    private val shapes = HashMap<Int, androidx.compose.ui.graphics.Shape>()
+    /** Скругление плитки — из кэша по целым пикселям: на кадре ничего не создаётся. */
+    fun shape(r: Float): androidx.compose.ui.graphics.Shape {
+        val k = r.roundToInt().coerceAtLeast(0)
+        return shapes.getOrPut(k) { if (k == 0) androidx.compose.ui.graphics.RectangleShape else RoundedCornerShape(k.toFloat()) }
+    }
     /** Идёт щипок: силу линзы ведут пальцы. */
     var pinching = false
     /**
@@ -479,6 +487,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         val fling = if (lensOn) snap else androidx.compose.foundation.gestures.ScrollableDefaults.flingBehavior()
         // поле линзы — от размера экрана, в основной композиции: меняется в том же кадре, что и число столбцов
         // (внутри BoxWithConstraints оно считалось бы на этапе раскладки — позже докрутки к кадру под пальцами)
+        ctl.tilePx = if (area.width > 0) ((area.width - with(density) { gapFor(feed.cols).toPx() } * (feed.cols - 1)) / feed.cols).toInt() else 0
         val half = if (lensOn && area.height > 0) with(density) { ((area.height - area.width / feed.cols) / 2f).coerceAtLeast(0f).toDp() } else 0.dp
         LazyVerticalGrid(
             columns = GridCells.Fixed(feed.cols),
@@ -561,11 +570,14 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     // кадры раскрытой стопки разлетаются из обложки по очереди и складываются обратно
     val fan = remember(c.entry.key, item.id) { Animatable(if (c.inStack && ctl.fanKey == c.entry.key) 0f else 1f) }
     val order = if (c.inStack) c.entry.members.indexOf(item).coerceAtLeast(1) else 0
-    LaunchedEffect(c.entry.key, item.id) {
-        if (fan.value < 1f) { delay((order * 16L).coerceAtMost(160L)); fan.animateTo(1f, spring(0.74f, 360f)) }
-    }
-    LaunchedEffect(ctl.folding) {
-        if (c.inStack && ctl.folding == c.entry.key) fan.animateTo(0f, spring(1f, 700f))
+    // эффекты веера — только у кадров раскрытой стопки: у обычных плиток при прокрутке не запускается ничего
+    if (c.inStack) {
+        LaunchedEffect(c.entry.key, item.id) {
+            if (fan.value < 1f) { delay((order * 16L).coerceAtMost(160L)); fan.animateTo(1f, spring(0.74f, 360f)) }
+        }
+        LaunchedEffect(ctl.folding) {
+            if (ctl.folding == c.entry.key) fan.animateTo(0f, spring(1f, 700f))
+        }
     }
     val fanFrom = remember(c.entry.key, item.id) {
         if (!c.inStack) IntOffset.Zero else {
@@ -582,7 +594,10 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
     val spot = remember { Spot() }
     val pose = remember { FloatArray(4) }
     val lensRadius = with(density) { 14.dp.toPx() }
-    BoxWithConstraints(
+    val lift = with(density) { LiftRadius.toPx() }
+    // обычный Box (не BoxWithConstraints: подкомпозиция в каждой плитке — главный тормоз ленивых сеток);
+    // размер плитки знает лента
+    Box(
         modifier.zIndex(if (leaving) 2f else if (c.label != null) 1f else 0f).aspectRatio(1f).testTag("tile-${item.id}")
             .onPlaced { val o = it.positionInParent(); spot.x = o.x; spot.y = o.y; spot.w = it.size.width.toFloat(); spot.h = it.size.height.toFloat() }
             .graphicsLayer {
@@ -596,38 +611,33 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick) * lerp(0.82f, 1f, f)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
                 alpha = if (hidden) 0f else f.coerceIn(0f, 1f)
+                // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
+                // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
+                // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
+                val r = (radius.toPx() + lift * pick + lensRadius * ctl.lens) / k.coerceAtLeast(0.3f)
+                shape = ctl.shape(r)
+                clip = !leaving
             }
     ) {
-        val px = with(density) { maxWidth.roundToPx() }
+        val px = ctl.tilePx.takeIf { it > 0 } ?: 256
         val bmp = rememberThumb(s, item, px)
         val shown by animateFloatAsState(if (bmp.value != null) 1f else 0f, if (bmp.fresh) tween(140) else tween(0), label = "load")
         val dust = remember(leaving, bmp.value) { if (leaving) bmp.value?.let(::dustOf) else null }
-        // в мозаике у стопки нет «листов» над обложкой (они рвали полотно щелью) — её выдаёт счётчик
-        val stackDepth = 0f
         Spacer(
             Modifier.fillMaxSize().drawBehind {
-                val inset = if (stackDepth > 0f) 3.dp.toPx() else 0f
-                val r = (radius.toPx() + LiftRadius.toPx() * pick + lensRadius * ctl.lensNow()).coerceAtLeast(0f)
-                if (inset > 0f) {
-                    // края стопки: два листа под обложкой, видны над ней
-                    drawSheet(Rect(inset * 2.2f, 0f, size.width - inset * 2.2f, size.height - inset * 2), r, p.muted.copy(alpha = 0.22f))
-                    drawSheet(Rect(inset * 1.1f, inset * 0.55f, size.width - inset * 1.1f, size.height - inset), r, p.muted.copy(alpha = 0.38f))
-                }
-                val area = Rect(0f, inset * 1.1f, size.width, size.height)
-                // миниатюры ещё нет — плитка залита основным цветом этого кадра (посчитан для поиска и стопок):
-                // при отдалении вместо серых квадратов сразу цветная мозаика твоей ленты
-                if (gone <= 0f) drawSheet(area, r, if (shown < 1f) placeholder(s, item, p) else p.tile)
+                val area = Rect(0f, 0f, size.width, size.height)
                 val b = bmp.value
                 if (gone > 0f && b != null) {
                     // удалённый кадр рассыпается на пиксели, и они стекают в знак
-                    val target = dissolveTarget(ctl, spot)
-                    drawDust(b, dust, area, gone, target)
+                    drawDust(b, dust, area, gone, dissolveTarget(ctl, spot))
                     return@drawBehind
                 }
-                if (b != null && shown > 0f) clipPath(androidx.compose.ui.graphics.Path().apply { addOutline(squircleOutline(area.left, area.top, area.right, area.bottom, r)) }) {
+                // миниатюры ещё нет — плитка залита основным цветом этого кадра (посчитан для поиска и стопок)
+                if (shown < 1f) drawRect(placeholder(s, item, p))
+                if (b != null && shown > 0f) {
                     drawCover(b, area, shown)
-                    // к краям линзы кадр уходит в тень (цвет фона): взгляд держится в центре
-                    // на светлой теме тень — это белая дымка: делаем её слабее, иначе края выглядят выцветшими
+                    // к краям линзы кадр уходит в тень (цвет фона): взгляд держится в центре;
+                    // на светлой теме тень — белая дымка: делаем её слабее, иначе края выглядят выцветшими
                     val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
                     if (sh > 0.01f) drawRect(p.page, alpha = sh)
                 }

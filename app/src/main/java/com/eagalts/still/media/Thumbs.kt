@@ -29,8 +29,9 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index) 
     /** Ключ — кадр и ступень размера: при щипке крупная миниатюра годится и для мелкой плитки. */
     private fun key(id: Long, step: Int) = id * 4 + step
 
-    fun step(px: Int) = when { px <= 160 -> 0; px <= 320 -> 1; px <= 640 -> 2; else -> 3 }
-    private fun stepPx(step: Int) = intArrayOf(160, 320, 640, 1024)[step]
+    // 512 — потолок системного кэша миниатюр: крупнее Android декодирует оригинал (медленно). Ленте хватает 512.
+    fun step(px: Int) = when { px <= 170 -> 0; px <= 340 -> 1; px <= 560 -> 2; else -> 3 }
+    private fun stepPx(step: Int) = intArrayOf(160, 320, 512, 1024)[step]
 
     /** Уже есть в памяти (этой ступени или крупнее) — без ожидания, чтобы плитка не мигала пустой. */
     fun peek(id: Long, px: Int): Bitmap? {
@@ -53,6 +54,19 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index) 
     suspend fun ensurePrint(item: MediaItem) {
         if (item.video || index.hasPrint(item.id)) return
         load(item, 160)
+    }
+
+    /** Фоновые отпечатки для стопок: один поток, мимо кэша и мимо потоков видимых плиток — лента не ждёт. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val printPool = Dispatchers.IO.limitedParallelism(1)
+
+    suspend fun printInBackground(item: MediaItem) {
+        if (item.video || index.hasPrint(item.id)) return
+        withContext(printPool) {
+            val bmp = cancellable { sig -> lib.thumbnail(item, 160, sig) } ?: return@withContext
+            runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
+            bmp.recycle()
+        }
     }
 
     fun trim() = cache.trimToSize(budget / 4)

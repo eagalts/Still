@@ -12,8 +12,8 @@ android {
         applicationId = "com.eagalts.still"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.1.8"
+        versionCode = 10
+        versionName = "0.1.9"
     }
 
     // Ключ и пароли в git не лежат: ~/.gradle/gradle.properties (still.storePassword и т. д.)
@@ -38,7 +38,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            if (hasKey) signingConfig = signingConfigs.getByName("still")
+            // своего ключа ещё нет — подписываем отладочным: release встаёт поверх прежних сборок
+            signingConfig = if (hasKey) signingConfigs.getByName("still") else signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -75,6 +76,8 @@ dependencies {
     // видео и живые фото — только в просмотре: плеер создаётся при открытии и освобождается при закрытии
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // базовые профили Compose и библиотек ставятся при установке APK — код ленты сразу скомпилирован, без «разгона»
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation(bom)

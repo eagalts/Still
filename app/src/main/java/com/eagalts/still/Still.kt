@@ -154,8 +154,8 @@ class Still(
         printJob = scope.launch {
             // пересборка — после первой порции (видимое сверху складывается сразу), дальше реже и в конце
             todo.chunked(150).forEachIndexed { i, chunk ->
-                chunk.forEach { runCatching { thumbs.ensurePrint(it) } }
-                if (i == 0 || i % 8 == 7) { printVersion++; rebuild() }
+                chunk.forEach { runCatching { thumbs.printInBackground(it) } }
+                if (i == 0 || i % 15 == 14) { printVersion++; rebuild() }
             }
             printVersion++; rebuild()
         }
