@@ -52,7 +52,8 @@ class MainActivity : ComponentActivity() {
             val dark = isSystemInDarkTheme()
             StillApp(still, dark, onAsk = ::ask)
             LaunchedEffect(still.request) {
-                still.request?.let { system.launch(IntentSenderRequest.Builder(it.sender).build()) }
+                // окно системы не открылось — это отказ, а не тишина: Still скажет об этом
+                still.request?.let { runCatching { system.launch(IntentSenderRequest.Builder(it.sender).build()) }.onFailure { still.requestDone(false) } }
             }
         }
     }

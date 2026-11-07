@@ -394,7 +394,10 @@ class Still(
         }
         val ids = items.map { it.id }.toSet()
         val sender = Actions.trashRequest(ctx, items.map(lib::uri), !restore) ?: run { toast(t("Android не дал убрать")); return }
-        request = SystemRequest(sender) { ok -> if (ok) removed(ids, restore) }
+        request = SystemRequest(sender) { ok ->
+            // отказ системы раньше проходил молча — со стороны выглядело как «удаление не работает»
+            if (ok) removed(ids, restore) else toast(t("Android не дал убрать"))
+        }
     }
 
     /**
@@ -409,9 +412,16 @@ class Still(
         leaving = ids
         scope.launch {
             kotlinx.coroutines.delay(860)
-            reload(force = true)
-            reloadJob?.join()
+            // перечитываем, пока MediaStore не отдаст ленту без удалённых (он бывает на долю секунды позади)
+            for (attempt in 0 until 4) {
+                reloadJob?.join()
+                reload(force = true)
+                reloadJob?.join()
+                if (all.none { it.id in ids }) break
+                kotlinx.coroutines.delay(400L * (attempt + 1))
+            }
             leaving = emptySet()
+            if (all.any { it.id in ids }) toast(t("Android не удалил кадр"))
         }
     }
 
