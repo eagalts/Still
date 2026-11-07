@@ -56,7 +56,7 @@ class RulesTest {
     @Test fun burstStacksAndBestIsHeaviest() {
         val items = listOf(
             item(1, taken = now, size = 900), item(2, taken = now - 500, size = 2000), item(3, taken = now - 1200, size = 1500),
-            item(4, taken = now - 60_000),
+            item(4, taken = now - 60 * 60_000),   // час спустя — другой момент
         )
         val e = Stacks.build(items) { 0L }
         assertEquals(2, e.size)
@@ -94,6 +94,32 @@ class RulesTest {
         val blue = android.graphics.Color.rgb(40, 90, 220); val red = android.graphics.Color.rgb(220, 40, 40)
         assertEquals(1, Stacks.build(listOf(a, b), color = { blue }) { h[it]!! }.size)
         assertEquals(2, Stacks.build(listOf(a, b), color = { if (it == 1L) blue else red }) { h[it]!! }.size)
+    }
+
+    /**
+     * Плотная серия — фото экрана на паре: два десятка разных по рисунку кадров каждые 2–4 минуты — одна стопка;
+     * короткая серия из несхожих кадров — нет; перерыв больше 5 минут — новый момент.
+     */
+    @Test fun denseSessionStacksAsOneMoment() {
+        val r = java.util.Random(1)
+        var t = now
+        val lab = (1L..20L).map { id -> item(id, taken = t).also { t -= (2 + r.nextInt(3)) * 60_000L } }
+        t -= 40 * 60_000L
+        val few = (21L..23L).map { id -> item(id, taken = t).also { t -= 20 * 60_000L } }
+        val hashes = HashMap<Long, Long>(); (1L..23L).forEach { hashes[it] = r.nextLong() or 1L }
+        val e = Stacks.build(lab + few) { hashes[it]!! }
+        assertEquals(20, e.first().members.size)
+        assertEquals(3, e.drop(1).count { !it.stacked })
+    }
+
+    /** Прогулка: кадры раз в 8–12 минут больше часа — один момент; весь день понемногу — не один. */
+    @Test fun walkIsOneMomentButWholeDayIsNot() {
+        var t = now
+        val walk = (1L..9L).map { id -> item(id, taken = t).also { t -= (8 + id % 5) * 60_000L } }
+        assertEquals(1, Stacks.build(walk) { 0L }.size)
+        t = now
+        val day = (1L..40L).map { id -> item(id, taken = t).also { t -= 14 * 60_000L } }   // 9 часов по кадру в 14 минут
+        assertTrue(Stacks.build(day) { 0L }.size > 1)
     }
 
     @Test fun videoAndOtherSourcesNeverStack() {

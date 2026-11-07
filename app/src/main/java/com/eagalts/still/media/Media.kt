@@ -93,6 +93,15 @@ object Stacks {
     /** До этой разницы отпечатков цвет не проверяем — кадры и так почти одинаковые. */
     const val SURE_BITS = 6
     private const val LOOK_BACK = 12
+    /**
+     * Момент: не меньше [SESSION_MIN] кадров подряд с промежутками не больше [SESSION_GAP_MS] — одна съёмка
+     * (фото экрана на паре, прогулка в тумане), складывается целиком, даже если кадры не похожи по рисунку и цвету.
+     */
+    const val SESSION_MIN = 4
+    const val SESSION_GAP_MS = 15 * 60_000L
+    /** Длиннее — это уже не момент, а день: делим на плотные куски с промежутками до [DENSE_GAP_MS]. */
+    const val SESSION_MAX_SPAN_MS = 3 * 60 * 60_000L
+    const val DENSE_GAP_MS = 5 * 60_000L
 
     /** [items] — по убыванию времени съёмки. [hash] — 0, если ещё не посчитан; [color] — null, если не посчитан. */
     fun build(items: List<MediaItem>, color: (Long) -> Int? = { null }, hash: (Long) -> Long): List<Entry> {
@@ -113,6 +122,28 @@ object Stacks {
                 j--
             }
             if (best >= 0) parent[find(i)] = find(best)
+        }
+        // момент — цепочка кадров одного источника с короткими промежутками — целиком в одну стопку
+        // (видео в момент не входят и его не рвут)
+        fun sessions(from: Int, to: Int, gap: Long, out: MutableList<IntArray>) {
+            var cur = ArrayList<Int>()
+            fun flush() { if (cur.isNotEmpty()) out += cur.toIntArray(); cur = ArrayList() }
+            for (i in from..to) {
+                val it = items[i]
+                if (it.video) continue
+                val prev = cur.lastOrNull()
+                if (prev != null && (items[prev].taken - it.taken > gap || items[prev].source != it.source)) flush()
+                cur += i
+            }
+            flush()
+        }
+        val wide = ArrayList<IntArray>()
+        if (n > 0) sessions(0, n - 1, SESSION_GAP_MS, wide)
+        for (sess in wide) {
+            val span = items[sess.first()].taken - items[sess.last()].taken
+            val parts = if (span <= SESSION_MAX_SPAN_MS) listOf(sess)
+            else ArrayList<IntArray>().also { sessions(sess.first(), sess.last(), DENSE_GAP_MS, it) }
+            for (part in parts) if (part.size >= SESSION_MIN) part.forEach { parent[find(it)] = find(part[0]) }
         }
         // стопка встаёт на место своего самого свежего кадра
         val groups = LinkedHashMap<Int, ArrayList<MediaItem>>()
