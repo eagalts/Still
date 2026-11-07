@@ -27,6 +27,10 @@ interface Library {
     fun full(it: MediaItem, maxPx: Int): Bitmap?
     /** Поколение MediaStore: не изменилось — перечитывать нечего. */
     fun generation(): Long = -1
+    /** Место съёмки из файла (широта, долгота) или null. Блокирующий. */
+    fun place(it: MediaItem): FloatArray? = null
+    /** Android даёт читать место съёмки (без доступа координаты из файлов вырезаны). */
+    fun canPlace(): Boolean = false
     fun observe(onChange: () -> Unit): () -> Unit = { }
 }
 
@@ -111,6 +115,16 @@ class MediaStoreLibrary(ctx: Context) : Library {
             // аппаратный битмап: не занимает кучу Java и рисуется сразу с GPU
             dec.allocator = ImageDecoder.ALLOCATOR_HARDWARE
         }
+    }.getOrNull()
+
+    override fun canPlace(): Boolean =
+        ctx.checkSelfPermission(android.Manifest.permission.ACCESS_MEDIA_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    override fun place(it: MediaItem): FloatArray? = runCatching {
+        if (!canPlace()) return null
+        val u = MediaStore.setRequireOriginal(uri(it))
+        cr.openInputStream(u)?.use { s -> androidx.exifinterface.media.ExifInterface(s).latLong }
+            ?.let { ll -> floatArrayOf(ll[0].toFloat(), ll[1].toFloat()) }
     }.getOrNull()
 
     override fun generation(): Long = if (Build.VERSION.SDK_INT >= 30)

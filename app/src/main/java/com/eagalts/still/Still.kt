@@ -149,7 +149,8 @@ class Still(
      */
     private fun printMissing() {
         if (printJob?.isActive == true) return
-        val todo = all.filter { !it.video && !index.hasPrint(it.id) }
+        val places = lib.canPlace()
+        val todo = all.filter { !it.video && (!index.hasPrint(it.id) || (places && !index.placeChecked(it.id))) }
         if (todo.isEmpty()) return
         printJob = scope.launch {
             // пересборка — после первой порции (видимое сверху складывается сразу), дальше реже и в конце
@@ -189,7 +190,7 @@ class Still(
             is Filter.Search -> items.filter { f.query.matches(it, index.color(it.id)) }
         }
         // стопки — в ленте и альбомах; в поиске и корзине каждый кадр сам по себе
-        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::color, index::hash)
+        val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Stacks.build(base, index::color, index::place, index::hash)
         else base.map { Entry(it, listOf(it)) }
         // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
         newestFirst.asReversed().map { if (it.stacked) Entry(it.cover, it.members.asReversed()) else it }

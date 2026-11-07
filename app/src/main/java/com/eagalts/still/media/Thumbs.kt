@@ -61,11 +61,24 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index) 
     private val printPool = Dispatchers.IO.limitedParallelism(1)
 
     suspend fun printInBackground(item: MediaItem) {
-        if (item.video || index.hasPrint(item.id)) return
+        if (item.video) return
+        val needPrint = !index.hasPrint(item.id)
+        // без доступа к месту не помечаем «места нет» — иначе после выдачи доступа место так и не прочиталось бы
+        val needPlace = !index.placeChecked(item.id) && lib.canPlace()
+        if (!needPrint && !needPlace) return
         withContext(printPool) {
-            val bmp = cancellable { sig -> lib.thumbnail(item, 160, sig) } ?: return@withContext
-            runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
-            bmp.recycle()
+            if (needPrint) {
+                val bmp = cancellable { sig -> lib.thumbnail(item, 160, sig) }
+                if (bmp != null) {
+                    runCatching { index.putPrint(item.id, Pixels.dHash(bmp), Pixels.memoryColor(bmp)) }
+                    bmp.recycle()
+                }
+            }
+            // место съёмки — из самого файла, только для моментов; наружу не уходит, хранится в шифрованном индексе
+            if (needPlace) {
+                val ll = lib.place(item)
+                index.putPlace(item.id, ll?.get(0) ?: Float.NaN, ll?.get(1) ?: Float.NaN)
+            }
         }
     }
 

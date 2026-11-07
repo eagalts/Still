@@ -94,17 +94,21 @@ object Stacks {
     const val SURE_BITS = 6
     private const val LOOK_BACK = 12
     /**
-     * Момент: не меньше [SESSION_MIN] кадров подряд с промежутками не больше [SESSION_GAP_MS] — одна съёмка
-     * (фото экрана на паре, прогулка в тумане), складывается целиком, даже если кадры не похожи по рисунку и цвету.
+     * Момент — как в Фото Apple, по времени и месту: не меньше [SESSION_MIN] кадров подряд, где соседи сняты
+     * в пределах часа и 1,5 км (место — из самого файла) или, если места нет, в пределах 15 минут. Складывается
+     * целиком, даже если кадры не похожи (фото экрана на паре, прогулка в тумане 18:27–20:49).
      */
     const val SESSION_MIN = 4
+    /** Без места: соседние кадры до 15 минут — один момент. */
     const val SESSION_GAP_MS = 15 * 60_000L
-    /** Длиннее — это уже не момент, а день: делим на плотные куски с промежутками до [DENSE_GAP_MS]. */
-    const val SESSION_MAX_SPAN_MS = 3 * 60 * 60_000L
-    const val DENSE_GAP_MS = 5 * 60_000L
+    /** С местом: соседние кадры до часа и не дальше [PLACE_M] друг от друга — один момент (прогулка, пара, вечер). */
+    const val PLACE_GAP_MS = 60 * 60_000L
+    const val PLACE_M = 1500.0
+    /** Длиннее — это уже не момент, а день: режем по самым большим паузам. */
+    const val SESSION_MAX_SPAN_MS = 6 * 60 * 60_000L
 
     /** [items] — по убыванию времени съёмки. [hash] — 0, если ещё не посчитан; [color] — null, если не посчитан. */
-    fun build(items: List<MediaItem>, color: (Long) -> Int? = { null }, hash: (Long) -> Long): List<Entry> {
+    fun build(items: List<MediaItem>, color: (Long) -> Int? = { null }, place: (Long) -> FloatArray? = { null }, hash: (Long) -> Long): List<Entry> {
         val n = items.size
         val parent = IntArray(n) { it }
         fun find(x: Int): Int { var r = x; while (parent[r] != r) { parent[r] = parent[parent[r]]; r = parent[r] }; return r }
@@ -125,24 +129,38 @@ object Stacks {
         }
         // момент — цепочка кадров одного источника с короткими промежутками — целиком в одну стопку
         // (видео в момент не входят и его не рвут)
-        fun sessions(from: Int, to: Int, gap: Long, out: MutableList<IntArray>) {
+        val places = Array(n) { if (items[it].video) null else place(items[it].id) }
+        // соседи в одном моменте: оба с местом — до часа и рядом; иначе — до 15 минут
+        fun together(a: Int, b: Int, cap: Long?): Boolean {
+            val dt = items[a].taken - items[b].taken
+            if (cap != null) return dt <= cap
+            val pa = places[a]; val pb = places[b]
+            return if (pa != null && pb != null) dt <= PLACE_GAP_MS && meters(pa, pb) <= PLACE_M else dt <= SESSION_GAP_MS
+        }
+        fun sessions(from: Int, to: Int, cap: Long?, out: MutableList<IntArray>) {
             var cur = ArrayList<Int>()
             fun flush() { if (cur.isNotEmpty()) out += cur.toIntArray(); cur = ArrayList() }
             for (i in from..to) {
                 val it = items[i]
                 if (it.video) continue
                 val prev = cur.lastOrNull()
-                if (prev != null && (items[prev].taken - it.taken > gap || items[prev].source != it.source)) flush()
+                if (prev != null && (!together(prev, i, cap) || items[prev].source != it.source)) flush()
                 cur += i
             }
             flush()
         }
         val wide = ArrayList<IntArray>()
-        if (n > 0) sessions(0, n - 1, SESSION_GAP_MS, wide)
-        for (sess in wide) {
+        if (n > 0) sessions(0, n - 1, null, wide)
+        // слишком длинный момент — это уже день: режем по самым большим паузам, пока куски не станут короче предела
+        fun cut(sess: IntArray, out: MutableList<IntArray>) {
             val span = items[sess.first()].taken - items[sess.last()].taken
-            val parts = if (span <= SESSION_MAX_SPAN_MS) listOf(sess)
-            else ArrayList<IntArray>().also { sessions(sess.first(), sess.last(), DENSE_GAP_MS, it) }
+            if (span <= SESSION_MAX_SPAN_MS || sess.size < 2) { out += sess; return }
+            var at = 1; var best = -1L
+            for (k in 1 until sess.size) { val g = items[sess[k - 1]].taken - items[sess[k]].taken; if (g > best) { best = g; at = k } }
+            cut(sess.copyOfRange(0, at), out); cut(sess.copyOfRange(at, sess.size), out)
+        }
+        for (sess in wide) {
+            val parts = ArrayList<IntArray>().also { cut(sess, it) }
             for (part in parts) if (part.size >= SESSION_MIN) part.forEach { parent[find(it)] = find(part[0]) }
         }
         // стопка встаёт на место своего самого свежего кадра
@@ -163,6 +181,13 @@ object Stacks {
             if (ca == null || cb == null || Hue.of(ca) != Hue.of(cb)) return -1
         }
         return d
+    }
+
+    /** Расстояние между точками, метры (равнопромежуточная проекция — для километров точно). */
+    internal fun meters(a: FloatArray, b: FloatArray): Double {
+        val lat = Math.toRadians(((a[0] + b[0]) / 2.0))
+        val dx = Math.toRadians((b[1] - a[1]).toDouble()) * Math.cos(lat); val dy = Math.toRadians((b[0] - a[0]).toDouble())
+        return 6_371_000.0 * Math.sqrt(dx * dx + dy * dy)
     }
 
     internal fun joins(a: MediaItem, b: MediaItem, hash: (Long) -> Long): Boolean = distance(a, b, hash(a.id), hash(b.id)) { null } >= 0

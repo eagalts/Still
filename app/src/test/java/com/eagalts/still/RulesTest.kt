@@ -122,6 +122,31 @@ class RulesTest {
         assertTrue(Stacks.build(day) { 0L }.size > 1)
     }
 
+    /** Прогулка 18:27–20:49 с паузами до 40 минут, точки рядом друг с другом — один момент. */
+    @Test fun longWalkWithPlaceIsOneMoment() {
+        val gaps = listOf(0, 12, 35, 6, 40, 18, 9, 14)   // минуты между кадрами, в сумме 2 ч 14 мин
+        var t = now; var lat = 55.70f
+        val walk = gaps.mapIndexed { i, g -> t -= g * 60_000L; item(i + 1L, taken = t) }
+        val places = walk.associate { it.id to floatArrayOf(lat.also { lat += 0.003f }, 37.6f) }   // шаг ~330 м
+        val e = Stacks.build(walk, place = { places[it] }) { 0L }
+        assertEquals(1, e.size)
+        // без мест тот же ряд кадров распадается: паузы длиннее 15 минут
+        assertTrue(Stacks.build(walk) { 0L }.size > 1)
+    }
+
+    /** Сменил место — новый момент, даже если прошло полчаса; весь день на одном месте — не один момент. */
+    @Test fun placeChangeSplitsAndWholeDayAtHomeIsNotOneMoment() {
+        var t = now
+        val a = (1L..4L).map { item(it, taken = t).also { t -= 10 * 60_000L } }
+        t -= 20 * 60_000L
+        val b = (5L..8L).map { item(it, taken = t).also { t -= 10 * 60_000L } }
+        val places = (a.map { it.id to floatArrayOf(55.70f, 37.60f) } + b.map { it.id to floatArrayOf(55.75f, 37.70f) }).toMap()   // ~8 км
+        assertEquals(2, Stacks.build(a + b, place = { places[it] }) { 0L }.size)
+        t = now
+        val day = (1L..30L).map { item(it, taken = t).also { t -= 50 * 60_000L } }   // 25 часов, всё дома
+        assertTrue(Stacks.build(day, place = { floatArrayOf(55.70f, 37.60f) }) { 0L }.size > 1)
+    }
+
     @Test fun videoAndOtherSourcesNeverStack() {
         val e = Stacks.build(listOf(item(1), item(2, video = true, taken = now - 100), item(3, Source.SCREENSHOT, taken = now - 200))) { 0L }
         assertEquals(3, e.size)
