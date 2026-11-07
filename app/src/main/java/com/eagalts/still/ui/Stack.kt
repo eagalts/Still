@@ -82,7 +82,7 @@ class PileCache {
  */
 fun DrawScope.drawPile(
     c: PileCache, cover: ImageBitmap?, b1: ImageBitmap?, b2: ImageBitmap?, ph: Color, p: Palette,
-    @Suppress("UNUSED_PARAMETER") cols: Int, shade: Float,
+    @Suppress("UNUSED_PARAMETER") cols: Int, shade: Float, coverOut: Boolean = false,
 ) {
     val side = size.minDimension
     if (c.side != side) {
@@ -113,14 +113,16 @@ fun DrawScope.drawPile(
     // повороты и сдвиги подобраны так, чтобы углы карточек и тень оставались в полях 8%
     card(b2, -8f, -0.018f, 0.008f, 0.22f)
     card(b1, 6f, 0.018f, -0.006f, 0.12f)
-    card(cover, 0f, 0f, 0f, 0f)
+    // стопка открыта — верхний снимок «вынут» (он сейчас в сетке стопки), нижние лежат на месте
+    if (!coverOut) card(cover, 0f, 0f, 0f, 0f)
     if (shade > 0.01f) drawRect(p.page, alpha = shade)
 }
 
 /**
- * Открытая стопка — как папка: лента уходит в размытие, кадры вылетают из стопки и раскладываются сеткой,
- * сверху — когда это было. Тап по кадру — просмотр только этих кадров, «назад», тап мимо кадров или
- * смахивание вниз — кадры складываются обратно в стопку.
+ * Открытая стопка — как папка: лента уходит в размытие, верхний снимок стопки перелетает на своё место в сетке,
+ * остальные проявляются на своих местах волной от него; сверху — когда это было. Тап по кадру — просмотр только
+ * этих кадров; «назад», тап мимо кадров или смахивание вниз — остальные гаснут, верхний улетает обратно в стопку.
+ * Ничего не вращается и не летит толпой: в движении всегда один кадр.
  */
 @Composable
 fun StackView(s: Still, ctl: FeedController) {
@@ -144,19 +146,25 @@ fun StackView(s: Still, ctl: FeedController) {
         scope.launch {
             ctl.stackFrom = ctl.feedBounds(e.cover.id) ?: ctl.stackFrom
             launch { pull.animateTo(0f, spring(1f, 500f)) }
-            launch { open.animateTo(0f, spring(1f, 420f)) }
-            members.map { m -> launch { flyOf(m.id).animateTo(0f, spring(0.92f, 520f, visibilityThreshold = FineThreshold)) } }
-                .forEach { it.join() }
+            launch { open.animateTo(0f, spring(1f, 380f)) }
+            members.forEach { m -> if (m.id != e.cover.id) launch { flyOf(m.id).animateTo(0f, spring(1f, 900f, visibilityThreshold = FineThreshold)) } }
+            flyOf(e.cover.id).animateTo(0f, spring(1f, 420f, visibilityThreshold = FineThreshold))
             s.closeStack()
         }
     }
 
     LaunchedEffect(e.key) {
-        launch { open.animateTo(1f, spring(0.9f, 380f)) }
+        launch { open.animateTo(1f, spring(1f, 380f)) }
+        // верхний снимок — сразу; остальные — волной от его места в сетке (ближние раньше)
+        val c = members.indexOfFirst { it.id == e.cover.id }.coerceAtLeast(0)
         members.forEachIndexed { i, m ->
             launch {
-                delay((i * 22L).coerceAtMost(220L))
-                flyOf(m.id).animateTo(1f, spring(0.8f, 340f, visibilityThreshold = FineThreshold))
+                if (i == c) flyOf(m.id).animateTo(1f, spring(0.92f, 360f, visibilityThreshold = FineThreshold))
+                else {
+                    val d = Math.abs(i / 3 - c / 3) + Math.abs(i % 3 - c % 3)
+                    delay((90L + d * 35L).coerceAtMost(300L))
+                    flyOf(m.id).animateTo(1f, spring(1f, 420f, visibilityThreshold = FineThreshold))
+                }
             }
         }
     }
@@ -204,7 +212,7 @@ fun StackView(s: Still, ctl: FeedController) {
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val shownP = { (open.value * (1f - pull.value / with(density) { 400.dp.toPx() })).coerceIn(0f, 1f) }
     Box(Modifier.fillMaxSize().testTag("stack")) {
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = shownP() }.background(p.page.copy(alpha = if (p.dark) 0.55f else 0.62f)))
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = shownP() }.background(p.page.copy(alpha = if (p.dark) 0.66f else 0.74f)))
         var origin by remember { mutableStateOf(Offset.Zero) }
         Column(
             Modifier.fillMaxSize().statusBarsPadding().nestedScroll(drag)
@@ -233,7 +241,7 @@ fun StackView(s: Still, ctl: FeedController) {
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 itemsIndexed(members, key = { _, m -> m.id }) { i, m ->
-                    StackTile(s, ctl, m, i, slots, flyOf(m.id))
+                    StackTile(s, ctl, m, m.id == e.cover.id, slots, flyOf(m.id))
                 }
             }
         }
@@ -241,7 +249,7 @@ fun StackView(s: Still, ctl: FeedController) {
 }
 
 @Composable
-private fun StackTile(s: Still, ctl: FeedController, item: MediaItem, i: Int, slots: HashMap<Long, Rect>, fly: Animatable<Float, AnimationVector1D>) {
+private fun StackTile(s: Still, ctl: FeedController, item: MediaItem, cover: Boolean, slots: HashMap<Long, Rect>, fly: Animatable<Float, AnimationVector1D>) {
     val p = LocalPalette.current
     val bmp = rememberThumb(s, item, 320)
     val r = with(LocalDensity.current) { 14.dp.toPx() }
@@ -253,18 +261,17 @@ private fun StackTile(s: Still, ctl: FeedController, item: MediaItem, i: Int, sl
                 val f = fly.value
                 val from = ctl.stackFrom
                 val slot = slots[item.id]
-                // летит из стопки в своё место: сдвиг и масштаб от плитки стопки в ленте, лёгкий поворот как у карточек
-                if (from != null && slot != null && slot.width > 0f) {
-                    val k = from.width / slot.width
-                    translationX = (from.center.x - slot.center.x) * (1f - f)
-                    translationY = (from.center.y - slot.center.y) * (1f - f)
+                if (cover && from != null && slot != null && slot.width > 0f) {
+                    // верхний снимок летит из стопки в своё место: стартует ровно там, где лежал в стопке (поля 8%)
+                    val card = from.deflate(from.width * 0.08f)
+                    val k = card.width / slot.width
+                    translationX = (card.center.x - slot.center.x) * (1f - f)
+                    translationY = (card.center.y - slot.center.y) * (1f - f)
                     val sc = (k + (1f - k) * f).coerceAtLeast(0f)
                     scaleX = sc; scaleY = sc
-                    rotationZ = (1f - f) * (if (i % 2 == 0) 6f else -5f)
-                    // из стопки видны только верхние — остальные проявляются по пути
-                    alpha = if (i < 3) 1f else (f * 2.5f).coerceIn(0f, 1f)
                 } else {
-                    val sc = (0.9f + 0.1f * f).coerceAtLeast(0f); scaleX = sc; scaleY = sc
+                    // остальные — проявляются на своём месте, чуть поднимаясь навстречу
+                    val sc = (0.94f + 0.06f * f).coerceAtLeast(0f); scaleX = sc; scaleY = sc
                     alpha = f.coerceIn(0f, 1f)
                 }
                 if (s.viewing != null && flyingIdState.longValue == item.id) alpha = 0f

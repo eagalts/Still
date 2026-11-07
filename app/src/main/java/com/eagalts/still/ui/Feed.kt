@@ -602,7 +602,8 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 translationY = pose[Lens.TY]
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
-                alpha = if (hidden || opened) 0f else 1f
+                // открытая стопка остаётся лежать — из неё вынут только верхний снимок (см. drawPile)
+                alpha = if (hidden || (opened && !stacked)) 0f else 1f
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
                 // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
@@ -623,7 +624,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         if (stacked && !leaving) Spacer(
             Modifier.fillMaxSize().drawBehind {
                 val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
-                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh)
+                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh, coverOut = opened)
             }
         ) else Spacer(
             Modifier.fillMaxSize().drawBehind {

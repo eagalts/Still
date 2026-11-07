@@ -549,6 +549,25 @@ class FeedUiTest {
         rule.onNodeWithTag("stack").assertDoesNotExist()
     }
 
+    /**
+     * Открытая стопка остаётся лежать в ленте — вынут только верхний снимок (он в сетке стопки): нижние карточки
+     * видны в центре плитки. Раньше пропадала вся плитка, и при закрытии стопка выскакивала на место рывком.
+     */
+    @Test fun openStackStaysInFeedWithoutItsTopPhoto() {
+        show()
+        val pile = rule.runOnIdle { ctl.bounds(103) }!!
+        rule.onNodeWithTag("tile-103").performClick()
+        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+        val b = shot("stack-open-feed")
+        // центр плитки стопки: под полупрозрачным фоном папки — нижние карточки, а не пустой фон
+        val bg = com.eagalts.still.ui.LightPalette.page
+        val px = b.getPixel(pile.center.x.toInt(), pile.center.y.toInt())
+        val d = kotlin.math.abs(android.graphics.Color.red(px) - (bg.red * 255).toInt()) +
+            kotlin.math.abs(android.graphics.Color.green(px) - (bg.green * 255).toInt()) +
+            kotlin.math.abs(android.graphics.Color.blue(px) - (bg.blue * 255).toInt())
+        assertTrue("стопка пропала из ленты целиком (разница с фоном $d)", d > 30)
+    }
+
     /** Тап мимо кадров стопки — она складывается обратно. */
     @Test fun tapOutsideClosesStack() {
         show()
