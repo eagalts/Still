@@ -89,6 +89,9 @@ class Vectors(private val file: File?) {
     fun has(id: Long): Boolean = synchronized(lock) { id in map }
     fun put(id: Long, v: ByteArray) = synchronized(lock) { map[id] = v; dirty = true }
     fun paper(id: Long): Boolean? = synchronized(lock) { paper[id] }
+    /** Какими весами решали «бумага или нет»; другие веса — решения забываются и считаются заново. */
+    private var paperModel = 0L
+    fun usePaperModel(sig: Long) = synchronized(lock) { if (sig != paperModel) { paper.clear(); paperModel = sig; dirty = true } }
     fun putPaper(id: Long, yes: Boolean) = synchronized(lock) { paper[id] = yes; dirty = true }
     val size: Int get() = synchronized(lock) { map.size }
 
@@ -103,9 +106,10 @@ class Vectors(private val file: File?) {
     private fun encode(): ByteArray {
         val dim = map.values.firstOrNull()?.size ?: 0
         val good = map.count { it.value.size == dim }
-        val b = ByteBuffer.allocate(1 + 4 + 4 + good * (8 + dim) + 4 + paper.size * 9)
-        b.put(2); b.putInt(dim); b.putInt(good)
+        val b = ByteBuffer.allocate(1 + 4 + 4 + good * (8 + dim) + 8 + 4 + paper.size * 9)
+        b.put(3); b.putInt(dim); b.putInt(good)
         for ((k, v) in map) if (v.size == dim) { b.putLong(k); b.put(v) }
+        b.putLong(paperModel)
         b.putInt(paper.size)
         for ((k, v) in paper) { b.putLong(k); b.put(if (v) 1 else 0) }
         return b.array().copyOf(b.position())
@@ -114,13 +118,15 @@ class Vectors(private val file: File?) {
     private fun decode(raw: ByteArray) {
         val b = ByteBuffer.wrap(raw)
         val ver = b.get().toInt()
-        if (ver != 1 && ver != 2) return
+        if (ver !in 1..3) return
         val dim = b.int; val n = b.int
         repeat(n) {
             if (b.remaining() < 8 + dim) return
             val k = b.long; val v = ByteArray(dim); b.get(v); map[k] = v
         }
-        if (ver >= 2 && b.remaining() >= 4) repeat(b.int) {
+        if (ver >= 3 && b.remaining() >= 8) paperModel = b.long
+        // v2 не помнил, какими весами решали, — его решения забываем (paperModel = 0 не совпадёт ни с какими весами)
+        if (ver >= 3 && b.remaining() >= 4) repeat(b.int) {
             if (b.remaining() < 9) return
             val k = b.long; paper[k] = b.get().toInt() == 1
         }

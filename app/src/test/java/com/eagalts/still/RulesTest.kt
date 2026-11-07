@@ -79,14 +79,32 @@ class RulesTest {
         assertEquals(setOf(20L, 21L, 22L, 30L), out)
     }
 
-    /** Распознавание бумаг в Kotlin даёт те же оценки, что и обученное (чеки — высоко, обычные фото — низко). */
+    /**
+     * Обновили распознаватель — решения «бумага или нет», сделанные старыми весами, забываются и считаются заново
+     * (иначе фото экранов, признанные в прошлой версии «не бумагой», так и остались бы в ленте); новые — переживают
+     * перезапуск.
+     */
+    @Test fun paperDecisionsFollowModelVersion() {
+        val f = java.io.File.createTempFile("scenes", ".bin").apply { delete() }
+        val a = com.eagalts.still.media.Vectors(f).apply { load() }
+        a.usePaperModel(1L); a.put(7L, ByteArray(1024) { 1 }); a.putPaper(7L, false); a.saveIfDirty()
+        val b = com.eagalts.still.media.Vectors(f).apply { load() }
+        b.usePaperModel(1L)
+        assertEquals(false, b.paper(7L))
+        b.usePaperModel(2L)
+        assertEquals(null, b.paper(7L))
+        assertTrue(b.has(7L))
+        f.delete()
+    }
+
+    /** Распознавание в Kotlin даёт те же оценки, что и обученное: бумаги и фото экранов — высоко, обычные фото — низко. */
     @Test fun paperworkMatchesTraining() {
         val pw = java.io.File("src/main/assets/paperwork.bin").inputStream().use(com.eagalts.still.media.Paperwork::read)!!
         val b = java.nio.ByteBuffer.wrap(java.io.File("src/test/resources/paperwork_fixture.bin").readBytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         repeat(b.int) { i ->
             val v = ByteArray(1024); b.get(v); val want = b.float
             assertEquals("кадр $i", want, pw.score(v), 0.02f)
-            assertEquals(i < 3, pw.isPaper(v))
+            assertEquals("кадр $i", i < 6, pw.isPaper(v))
         }
     }
 

@@ -107,7 +107,7 @@ fun FlowTimer(s: Still) {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            t("Скриншоты, записи экрана, мессенджеры, загрузки, а ещё чеки, квитанции и счётчики с камеры"),
+            t("Скриншоты, записи экрана, мессенджеры, загрузки, а ещё снятые камерой чеки, квитанции, счётчики и экраны"),
             color = p.muted.copy(alpha = 0.8f), fontSize = 12.sp, lineHeight = 16.sp, fontFamily = UiFont,
         )
     }

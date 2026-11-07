@@ -180,11 +180,13 @@ class Still(
     private fun printMissing() {
         if (printJob?.isActive == true) return
         val embedding = embedder != null
-        val todo = all.filter { thumbs.needsWork(it, embedding) }
-        if (todo.isEmpty()) return
         printJob = scope.launch {
-            val model = embedder?.invoke()
             val papers = paperwork?.let { withContext(Dispatchers.IO) { it() } }
+            // веса распознавания бумаг сменились (обновление) — прежние решения пересчитываются по сохранённым векторам
+            papers?.let { vectors.usePaperModel(it.signature) }
+            val todo = withContext(Dispatchers.Default) { all.filter { thumbs.needsWork(it, embedding) } }
+            if (todo.isEmpty()) return@launch
+            val model = embedder?.invoke()
             try {
                 // пересборка — после первой порции (видимое внизу складывается сразу), дальше реже и в конце
                 todo.chunked(150).forEachIndexed { i, chunk ->
