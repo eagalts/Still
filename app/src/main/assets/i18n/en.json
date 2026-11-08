@@ -75,5 +75,10 @@
  "Уйдёт в Поток через {0}": "Moves to Flow in {0}",
  "Уходят в Поток через": "Move to Flow after",
  "Скриншоты, записи экрана, мессенджеры, загрузки, а ещё снятые камерой чеки, квитанции, счётчики и экраны": "Screenshots, screen recordings, messengers, downloads — and receipts, bills, meters and screens shot with the camera",
- "Разбираю фото: {0} из {1}": "Sorting photos: {0} of {1}"
+ "Разбираю фото: {0} из {1}": "Sorting photos: {0} of {1}",
+ "{0} · уходят через {1}": "{0} · leave after {1}",
+ "Скрыть": "Hide",
+ "Показать": "Show",
+ "Скрыто: {0}": "Hidden: {0}",
+ "Показано: {0}": "Shown: {0}"
 }

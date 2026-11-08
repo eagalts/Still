@@ -135,6 +135,9 @@ fun Viewer(s: Still, ctl: FeedController) {
     var dismissing by remember(v) { mutableStateOf(false) }
     var chrome by remember(v) { mutableStateOf(true) }
     var zoomed by remember(v) { mutableStateOf(false) }
+    // скрытые размытием кадры, которые в этом просмотре уже показали
+    var revealed by remember(v) { mutableStateOf(emptySet<Long>()) }
+    fun veiled(m: MediaItem) = m.id in s.veiled && m.id !in revealed
     // высота подписей сверху и кнопок снизу — меряются, как только подписи собраны (кадр встаёт между ними)
     var chromeTop by remember { mutableStateOf(0f) }
     var chromeBottom by remember { mutableStateOf(0f) }
@@ -213,15 +216,15 @@ fun Viewer(s: Still, ctl: FeedController) {
         val f = flight.value
         // фон — не чёрный, а свечение самого кадра; тянешь вниз — проступает лента
         val bgAlpha = (f.coerceIn(0f, 1f) * (1f - pull * 1.15f)).coerceIn(0f, 1f)
-        Glow(s, item, Modifier.fillMaxSize().graphicsLayer { alpha = bgAlpha })
+        Glow(s, item, veiled(item), Modifier.fillMaxSize().graphicsLayer { alpha = bgAlpha })
 
         val inFlight = f < 0.999f || closing || dismissing
         // видео запускается само, когда долистал до него и кадр долетел; ушёл — останавливается
-        LaunchedEffect(settled?.id, f >= 0.999f, closing) {
+        LaunchedEffect(settled?.id, f >= 0.999f, closing, revealed) {
             val it = settled
-            if (it != null && it.video && f >= 0.999f && !closing) pb.playVideo(it.id, s.lib.uri(it)) else pb.stop()
+            if (it != null && it.video && f >= 0.999f && !closing && !veiled(it)) pb.playVideo(it.id, s.lib.uri(it)) else pb.stop()
         }
-        val thumb = rememberLarge(s, item)
+        val thumb = rememberLarge(s, item, veiled(item))
         // подписи видны (или вот-вот появятся) — кадр уступает им место; тап, зум, смахивание, подробности — во весь экран
         val chromeOn = chrome && !dismissing && !closing && !zoomed && info.value < 0.05f
         val room by animateFloatAsState(if (chromeOn) 1f else 0f, fineSpring(1f, 420f), label = "room")
@@ -261,6 +264,7 @@ fun Viewer(s: Still, ctl: FeedController) {
             Page(
                 s, it, box, pb, active = page == pager.settledPage && !inFlight,
                 rect = shownRect(it.width, it.height, box, chromeTop, chromeBottom, room),
+                veil = veiled(it), onReveal = { revealed = revealed + it.id },
                 onTap = { if (info.value > 0.01f) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else chrome = !chrome },
                 infoOpen = { info.value > 0.01f },
                 onInfoDrag = { dy -> scope.launch { info.snapTo((info.value - dy / panelH).coerceIn(0f, 1.15f)) } },
@@ -308,8 +312,8 @@ private val GlowFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
  * свечение перетекает в цвета следующего кадра.
  */
 @Composable
-private fun Glow(s: Still, item: MediaItem, modifier: Modifier) {
-    val thumb = rememberLarge(s, item)
+private fun Glow(s: Still, item: MediaItem, veil: Boolean, modifier: Modifier) {
+    val thumb = rememberLarge(s, item, veil)
     val small by produceState<ImageBitmap?>(null, item.id, thumb) {
         val t = thumb ?: return@produceState
         value = withContext(Dispatchers.Default) {
@@ -350,7 +354,11 @@ private fun Glow(s: Still, item: MediaItem, modifier: Modifier) {
 
 /** Кадр для полёта и первой отрисовки: самая крупная миниатюра из памяти, иначе грузим. */
 @Composable
-private fun rememberLarge(s: Still, item: MediaItem): ImageBitmap? {
+private fun rememberLarge(s: Still, item: MediaItem, veil: Boolean = false): ImageBitmap? {
+    // скрытый кадр — только очень размытая копия; оригинал не грузится, пока не нажали «Показать»
+    if (veil) return produceState(s.thumbs.peekVeil(item.id)?.asImageBitmap(), item.id, true) {
+        if (value == null) s.thumbs.loadVeil(item)?.let { value = it.asImageBitmap() }
+    }.value
     val st = produceState(s.thumbs.peek(item.id, 160)?.asImageBitmap(), item.id) {
         s.thumbs.load(item, 1024)?.let { value = it.asImageBitmap() }
     }
@@ -363,16 +371,16 @@ private fun rememberLarge(s: Still, item: MediaItem): ImageBitmap? {
  */
 @Composable
 private fun Page(
-    s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean, rect: Rect,
+    s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean, rect: Rect, veil: Boolean, onReveal: () -> Unit,
     infoOpen: () -> Boolean, onInfoDrag: (Float) -> Unit, onInfoEnd: (Float) -> Unit,
     onTap: () -> Unit, onZoom: (Boolean) -> Unit, onDrag: (Offset) -> Unit, onDragEnd: (Float) -> Unit,
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val maxPx = remember { max(box.width, box.height).toInt().coerceAtMost(4096) * 2 }
-    val thumb = rememberLarge(s, item)
-    val full by produceState<ImageBitmap?>(null, item.id) {
-        if (item.video) return@produceState
+    val thumb = rememberLarge(s, item, veil)
+    val full by produceState<ImageBitmap?>(null, item.id, veil) {
+        if (item.video || veil) { value = null; return@produceState }
         value = withContext(Dispatchers.IO) { s.lib.full(item, maxPx) }?.asImageBitmap()
     }
     val scale = remember { Animatable(1f) }
@@ -538,6 +546,17 @@ private fun Page(
                     filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
                 )
             }
+        }
+        // скрытый кадр: посередине — «Показать»; нажал — кадр виден, пока открыт просмотр
+        if (veil) Row(
+            Modifier.offset { androidx.compose.ui.unit.IntOffset(0, (rect.center.y - box.height / 2f).toInt()) }
+                .align(Alignment.Center).testTag("reveal").bouncy(0.92f, onClick = onReveal)
+                .clip(RoundedCornerShape(50)).background(Color(0x40FFFFFF)).padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Eye, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(t("Показать"), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
         }
         // видео и ожившее фото — поверх кадра, в его же рамке; появляются с первым кадром (без чёрной вспышки)
         val mine = pb.owner == item.id && active

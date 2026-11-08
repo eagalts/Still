@@ -186,11 +186,16 @@ class FeedUiTest {
         return b
     }
 
+    private fun feedIds() = still.feed.cells.take(still.feed.feedEnd + 1).filterIsInstance<Cell.Tile>().map { it.item.id }.toSet()
+    private fun flowIds() = still.feed.cells.filterIsInstance<Cell.Tile>().filter { it.flow }.map { it.item.id }.toSet()
+
     @Test fun feedHasCameraAndFreshNoiseButNotOld() {
         show()
-        val ids = still.feed.cells.filterIsInstance<Cell.Tile>().map { it.item.id }.toSet()
+        val ids = feedIds()
         assertTrue(500L in ids)
         assertTrue((600L..604L).none { it in ids })
+        // ушедшее из ленты лежит под ней, в «Потоке»
+        assertTrue((600L..604L).all { it in flowIds() })
         // серия — одна плитка-стопка, обложка — самый тяжёлый кадр
         assertTrue(103L in ids && 100L !in ids)
         shot("feed-light")
@@ -198,7 +203,7 @@ class FeedUiTest {
 
     @Test fun opensAtNewestAtTheBottomWithoutDates() {
         show()
-        val cells = still.feed.cells
+        val cells = still.feed.cells.take(still.feed.feedEnd + 1)
         assertTrue("в обычной ленте подписей нет", cells.all { (it as Cell.Tile).label == null })
         // от старого к новому: последняя плитка — свежая серия
         assertEquals(103L, (cells.last() as Cell.Tile).item.id)
@@ -215,14 +220,14 @@ class FeedUiTest {
         show()
         rule.runOnIdle { still.zoomTo(8) }
         // раскладка — сразу, подписи досчитываются следом
-        until { still.feed.cols == 8 && still.feed.cells.any { (it as Cell.Tile).label != null } }
+        until { still.feed.cols == 8 && still.feed.cells.any { (it as? Cell.Tile)?.label != null } }
         // подписи — на первых кадрах периодов, отдельных полос нет: все ячейки — кадры
-        assertTrue(still.feed.cells.all { it is Cell.Tile })
+        assertTrue(still.feed.cells.take(still.feed.feedEnd + 1).all { it is Cell.Tile })
         val months = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(months.toString(), months.isNotEmpty() && months.all { Regex("^\\p{L}+ \\d{4}$").matches(it) })
         shot("zoom-months")
         rule.runOnIdle { still.zoomTo(13) }
-        until { still.feed.cols == 13 && still.feed.cells.any { (it as Cell.Tile).label?.all(Char::isDigit) == true } }
+        until { still.feed.cols == 13 && still.feed.cells.any { (it as? Cell.Tile)?.label?.all(Char::isDigit) == true } }
         val years = still.feed.cells.filterIsInstance<Cell.Tile>().mapNotNull { it.label }
         assertTrue(years.isNotEmpty() && years.all { Regex("\\d{4}").matches(it) })
         shot("zoom-years")
@@ -233,9 +238,10 @@ class FeedUiTest {
         show()
         rule.runOnIdle { still.zoomTo(8) }
         // раскладка — сразу, подписи досчитываются следом
-        until { still.feed.cols == 8 && still.feed.cells.any { (it as Cell.Tile).label != null } }
+        until { still.feed.cols == 8 && still.feed.cells.any { (it as? Cell.Tile)?.label != null } }
         val b = shot("grid-8")
-        val y = b.height * 3 / 4
+        // ряд самой ленты (ниже может начинаться бледный «Поток», выше — пусто, если лента короче экрана)
+        val y = rule.runOnIdle { ctl.bounds(feedIds().first())!!.center.y.toInt() }
         val page = android.graphics.Color.WHITE
         val near = (b.width / 8 - 8..b.width / 8 + 8).filter { b.getPixel(it, y) == page }
         val d = rule.activity.resources.displayMetrics.density
@@ -257,7 +263,7 @@ class FeedUiTest {
         show()
         // полный ряд над центральным (свежий ряд может быть неполным) и самый верхний видимый ряд
         val infos = ctl.grid.layoutInfo.visibleItemsInfo
-        val rows = infos.groupBy { it.row }.filter { it.value.size == 3 }.toSortedMap()
+        val rows = infos.filter { it.index <= still.feed.feedEnd }.groupBy { it.row }.filter { it.value.size == 3 }.toSortedMap()
         val near = rows.values.last()[0]; val far = rows.values.first()[0]
         fun rowY(i: androidx.compose.foundation.lazy.grid.LazyGridItemInfo) = (i.offset.y - ctl.grid.layoutInfo.viewportStartOffset + i.size.height / 2)
         val rest = shot("lens-rest")
@@ -613,7 +619,7 @@ class FeedUiTest {
      */
     @Test fun flowSliderChangesWhatLeaves() {
         show()
-        fun inFeed(id: Long) = still.feed.cells.any { it.key == id }
+        fun inFeed(id: Long) = id in feedIds()
         assertTrue(inFeed(500L))
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
@@ -626,7 +632,7 @@ class FeedUiTest {
         rule.onNodeWithText("1 час").assertExists()
         assertEquals(com.eagalts.still.media.Ephemeral.HOUR, still.flowTtl)
         rule.runOnIdle { still.open(null) }
-        until { still.feed.cells.none { it.key == 500L } }
+        until { 500L !in feedIds() && still.feed.cells.isNotEmpty() }
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
         rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size) }
@@ -635,7 +641,7 @@ class FeedUiTest {
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithText("3 месяца").assertExists()
         rule.runOnIdle { still.open(null) }
-        until { still.feed.cells.any { it.key == 600L } }
+        until { 600L in feedIds() }
     }
 
     /**
@@ -755,30 +761,73 @@ class FeedUiTest {
     }
 
     /**
-     * Вход в «Поток» — под самым свежим рядом: долистал до конца и потянул дальше — «Поток» открылся; чуть потянул
-     * и отпустил — лента вернулась на место, ничего не открылось.
+     * «Поток» лежит под лентой: внизу он бледный и размытый (кадр не похож на себя), долистал его до середины —
+     * чёткий, как сам снимок; сверху капсула «Поток ×», крестик возвращает к свежим кадрам.
      */
-    @Test fun pullPastNewestOpensFlow() {
+    @Test fun flowFadesInBelowFeed() {
         show()
-        rule.onNodeWithTag("flow-door").assertExists()
-        rule.onNodeWithText("Поток").assertExists()
-        shot("flow-door")
-        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
-        // чуть-чуть — не открывается
-        rule.onNodeWithTag("feed").performTouchInput {
-            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.6f))
-            repeat(5) { moveBy(androidx.compose.ui.geometry.Offset(0f, -12f)) }
-            up()
+        rule.onNodeWithTag("flow-header").assertExists()
+        fun diffAtCenter(id: Long): Int {
+            val b = shot("flow-$id", settle = false)
+            val r = rule.runOnIdle { ctl.bounds(id) } ?: return -1
+            val t = still.lib.thumbnail(still.all.first { it.id == id }, 256, android.os.CancellationSignal())!!
+            val want = t.getPixel(t.width / 2, t.height / 2); val got = b.getPixel(r.center.x.toInt(), r.center.y.toInt())
+            return kotlin.math.abs(android.graphics.Color.red(want) - android.graphics.Color.red(got)) +
+                kotlin.math.abs(android.graphics.Color.green(want) - android.graphics.Color.green(got)) + kotlin.math.abs(android.graphics.Color.blue(want) - android.graphics.Color.blue(got))
         }
+        // самый первый кадр «Потока» — сразу под лентой, у нижнего края: бледный
+        val first = (still.feed.cells[still.feed.feedEnd + 2] as Cell.Tile).item.id
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        val atRest = diffAtCenter(first)
+        assertTrue("внизу кадр «Потока» не бледный: $atRest", atRest > 60)
+        // долистали его до середины — чёткий
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == first }, 0) }
         rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
-        assertEquals(null, still.filter)
-        // дальше порога — «Поток»
-        rule.onNodeWithTag("feed").performTouchInput {
-            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.8f))
-            repeat(30) { moveBy(androidx.compose.ui.geometry.Offset(0f, -25f)) }
-            up()
+        val centered = diffAtCenter(first)
+        assertTrue("в середине кадр «Потока» не проявился: $centered", centered in 0..40)
+        rule.onNodeWithTag("filter-close").assertExists().performClick()
+        until(3000) { ctl.atEnd }
+    }
+
+    /** Резкость кадра на экране: самые сильные перепады цвета (верхний 1%) — есть ли в нём чёткие края. */
+    private fun sharpness(b: Bitmap, r: androidx.compose.ui.geometry.Rect): Int {
+        val g = ArrayList<Int>()
+        var y = (r.top + r.height * 0.15f).toInt()
+        while (y < r.bottom - r.height * 0.15f - 1) {
+            var x = (r.left + r.width * 0.15f).toInt()
+            while (x < r.right - r.width * 0.15f - 1) {
+                val a = b.getPixel(x, y); val c = b.getPixel(x + 1, y); val d = b.getPixel(x, y + 1)
+                g += kotlin.math.abs(android.graphics.Color.green(a) - android.graphics.Color.green(c)) +
+                    kotlin.math.abs(android.graphics.Color.green(a) - android.graphics.Color.green(d))
+                x += 1
+            }
+            y += 2
         }
-        until(3000) { still.filter == Filter.Flow }
+        g.sort()
+        return g[(g.size * 0.99).toInt().coerceAtMost(g.size - 1)]
+    }
+
+    /**
+     * «Скрыть»: выделил кадр — он в ленте очень сильно размыт (резкость падает в разы); в просмотре — тоже размыт,
+     * посередине «Показать»; нажал — кадр виден.
+     */
+    @Test fun hideBlursPhotoEverywhere() {
+        show()
+        val r = rule.runOnIdle { ctl.bounds(300) }!!
+        val before = sharpness(shot("veil-before"), r)
+        rule.onNodeWithTag("tile-300").performTouchInput { longClick() }
+        rule.waitForIdle()
+        rule.onNodeWithTag("bar-Скрыть").performClick()
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        assertTrue(300L in still.veiled)
+        val after = sharpness(shot("veil-after"), rule.runOnIdle { ctl.bounds(300) }!!)
+        assertTrue("кадр не размыт: резкость $after, было $before", after < before / 3)
+        rule.onNodeWithTag("tile-300").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        rule.onNodeWithTag("reveal").assertExists().performClick()
+        rule.mainClock.advanceTimeBy(600); rule.waitForIdle()
+        rule.onNodeWithTag("reveal").assertDoesNotExist()
+        shot("veil-revealed")
     }
 
     @Test fun tapOpensViewerAndBackFliesHome() {

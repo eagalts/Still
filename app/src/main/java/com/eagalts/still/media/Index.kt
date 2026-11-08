@@ -14,6 +14,8 @@ import java.io.File
  */
 class Index(private val file: File?) {
     private val kept = HashSet<Long>()
+    /** Скрытые размытием: в ленте, стопках и просмотре — только очень размытая копия, пока не нажмёшь «Показать». */
+    private val veiled = HashSet<Long>()
     private val hash = HashMap<Long, Long>()
     private val color = HashMap<Long, Int>()
     @Volatile private var dirty = false
@@ -23,6 +25,10 @@ class Index(private val file: File?) {
 
     fun keptIds(): Set<Long> = synchronized(lock) { HashSet(kept) }
     fun keep(ids: Collection<Long>) = synchronized(lock) { if (kept.addAll(ids)) dirty = true }
+    fun veiledIds(): Set<Long> = synchronized(lock) { HashSet(veiled) }
+    fun veil(ids: Collection<Long>, on: Boolean) = synchronized(lock) {
+        if (if (on) veiled.addAll(ids) else veiled.removeAll(ids.toSet())) dirty = true
+    }
     fun hash(id: Long): Long = synchronized(lock) { hash[id] ?: 0L }
     fun color(id: Long): Int? = synchronized(lock) { color[id] }
     fun hasPrint(id: Long): Boolean = synchronized(lock) { id in hash }
@@ -33,7 +39,7 @@ class Index(private val file: File?) {
     /** Убрать знание о кадрах, которых больше нет (удалены другим приложением). */
     fun retain(alive: Set<Long>) = synchronized(lock) {
         val before = kept.size + hash.size
-        kept.retainAll(alive); hash.keys.retainAll(alive); color.keys.retainAll(alive)
+        kept.retainAll(alive); hash.keys.retainAll(alive); color.keys.retainAll(alive); veiled.retainAll(alive)
         if (kept.size + hash.size != before) dirty = true
     }
 
@@ -46,9 +52,10 @@ class Index(private val file: File?) {
     private fun encode(): ByteArray {
         val bo = ByteArrayOutputStream()
         DataOutputStream(bo).use { o ->
-            o.writeByte(3)
+            o.writeByte(4)
             o.writeInt(kept.size); kept.forEach(o::writeLong)
             o.writeInt(hash.size); hash.forEach { (k, v) -> o.writeLong(k); o.writeLong(v); o.writeInt(color[k] ?: 0) }
+            o.writeInt(veiled.size); veiled.forEach(o::writeLong)
         }
         return bo.toByteArray()
     }
@@ -56,11 +63,12 @@ class Index(private val file: File?) {
     private fun decode(b: ByteArray) {
         DataInputStream(ByteArrayInputStream(b)).use { i ->
             val v = i.readByte().toInt()
-            if (v !in 1..3) return
+            if (v !in 1..4) return
             repeat(i.readInt()) { kept += i.readLong() }
             repeat(i.readInt()) { val k = i.readLong(); hash[k] = i.readLong(); color[k] = i.readInt() }
             // v2 хранил место съёмки для прежних стопок — больше не нужно, пропускаем
             if (v == 2) repeat(i.readInt()) { i.readLong(); i.readLong() }
+            if (v >= 4) repeat(i.readInt()) { veiled += i.readLong() }
         }
     }
 }

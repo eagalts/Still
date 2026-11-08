@@ -56,5 +56,35 @@ object Pixels {
         return android.graphics.Color.rgb((sum[best][0] / w).toInt(), (sum[best][1] / w).toInt(), (sum[best][2] / w).toInt())
     }
 
+    /** Очень сильное размытие для скрытых кадров: 10 пикселей → 40 со сглаживанием → два прохода размытия 5×5. */
+    fun veil(src: Bitmap): Bitmap {
+        val k = 10f / maxOf(src.width, src.height)
+        val tiny = Bitmap.createScaledBitmap(src, maxOf(1, (src.width * k).toInt()), maxOf(1, (src.height * k).toInt()), true)
+        val big = Bitmap.createScaledBitmap(tiny, tiny.width * 4, tiny.height * 4, true)
+        if (tiny !== src) tiny.recycle()
+        val w = big.width; val h = big.height
+        var px = IntArray(w * h); big.getPixels(px, 0, w, 0, 0, w, h)
+        repeat(2) { px = box(box(px, w, h, true), w, h, false) }
+        val out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+        big.recycle()
+        return out
+    }
+
+    /** Размытие окном 5 по одной оси (край — повтор крайнего пикселя). */
+    private fun box(src: IntArray, w: Int, h: Int, horizontal: Boolean): IntArray {
+        val out = IntArray(src.size)
+        val n = if (horizontal) w else h; val lines = if (horizontal) h else w
+        for (l in 0 until lines) for (i in 0 until n) {
+            var r = 0; var g = 0; var b = 0
+            for (d in -2..2) {
+                val j = (i + d).coerceIn(0, n - 1)
+                val c = if (horizontal) src[l * w + j] else src[j * w + l]
+                r += c shr 16 and 0xFF; g += c shr 8 and 0xFF; b += c and 0xFF
+            }
+            out[if (horizontal) l * w + i else i * w + l] = (0xFF shl 24) or ((r / 5) shl 16) or ((g / 5) shl 8) or (b / 5)
+        }
+        return out
+    }
+
     private fun luma(c: Int) = (c shr 16 and 0xFF) * 299 + (c shr 8 and 0xFF) * 587 + (c and 0xFF) * 114
 }

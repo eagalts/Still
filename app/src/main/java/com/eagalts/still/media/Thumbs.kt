@@ -80,5 +80,23 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index, 
         }
     }
 
+    /**
+     * Скрытый кадр — очень размытая копия: кадр сжат до 10 пикселей по длинной стороне (сильнее размыть нельзя —
+     * деталей просто не остаётся), плавно поднят до 40 и дважды сглажен — без ступенек, когда растянут на плитку.
+     * Без фильтров видеокарты и без декодирования крупнее миниатюры: дешевле обычной плитки, хоть вся галерея скрыта.
+     * В памяти — до 4 МБ таких копий (≈ 6 КБ на кадр), остальное пересчитывается из системной миниатюры.
+     */
+    private val veils = object : LruCache<Long, Bitmap>(4 shl 20) {
+        override fun sizeOf(key: Long, value: Bitmap) = value.allocationByteCount
+    }
+    fun peekVeil(id: Long): Bitmap? = veils.get(id)
+    suspend fun loadVeil(item: MediaItem): Bitmap? {
+        veils.get(item.id)?.let { return it }
+        val src = load(item, 160) ?: return null
+        val v = withContext(pool) { Pixels.veil(src) }
+        veils.put(item.id, v)
+        return v
+    }
+
     fun trim() = cache.trimToSize(budget / 4)
 }

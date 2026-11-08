@@ -109,6 +109,17 @@ class RulesTest {
         f.delete()
     }
 
+    /** Скрытые размытием кадры помнятся после перезапуска (зашифрованный индекс); «Показать» снимает скрытие. */
+    @Test fun veiledSurvivesRestart() {
+        val f = java.io.File.createTempFile("index", ".bin").apply { delete() }
+        com.eagalts.still.media.Index(f).apply { veil(listOf(1L, 2L), true); saveIfDirty() }
+        val b = com.eagalts.still.media.Index(f)
+        assertEquals(setOf(1L, 2L), b.veiledIds())
+        b.veil(listOf(1L), false)
+        assertEquals(setOf(2L), b.veiledIds())
+        f.delete()
+    }
+
     /** Распознавание в Kotlin даёт те же оценки, что и обученное: бумаги и фото экранов — высоко, обычные фото — низко. */
     @Test fun paperworkMatchesTraining() {
         val pw = java.io.File("src/main/assets/paperwork.bin").inputStream().use(com.eagalts.still.media.Paperwork::read)!!

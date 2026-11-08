@@ -75,5 +75,10 @@
  "Уйдёт в Поток через {0}": "Passera dans le Flux dans {0}",
  "Уходят в Поток через": "Passent dans le Flux après",
  "Скриншоты, записи экрана, мессенджеры, загрузки, а ещё снятые камерой чеки, квитанции, счётчики и экраны": "Captures, enregistrements d’écran, messageries, téléchargements — et tickets, factures, compteurs et écrans photographiés",
- "Разбираю фото: {0} из {1}": "Tri des photos : {0} sur {1}"
+ "Разбираю фото: {0} из {1}": "Tri des photos : {0} sur {1}",
+ "{0} · уходят через {1}": "{0} · partent après {1}",
+ "Скрыть": "Masquer",
+ "Показать": "Afficher",
+ "Скрыто: {0}": "Masquées : {0}",
+ "Показано: {0}": "Affichées : {0}"
 }

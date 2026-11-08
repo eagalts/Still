@@ -137,6 +137,10 @@ private fun SelectionBar(s: Still, ctl: FeedController) {
             } else {
                 BarButton(Icons.Share, t("Поделиться")) { s.share(items) }
                 if (temporary) BarButton(Icons.Pin, t("Оставить")) { s.keep(items.map { it.id }); s.selection = emptySet() }
+                // скрыть размытием; всё выделенное уже скрыто — показать
+                val allVeiled = items.isNotEmpty() && items.all { it.id in s.veiled }
+                if (allVeiled) BarButton(Icons.Eye, t("Показать")) { s.veil(items.map { it.id }, false) }
+                else BarButton(Icons.EyeOff, t("Скрыть")) { s.veil(items.map { it.id }, true) }
                 BarButton(Icons.Heart, t("Избранное")) { s.favorite(items, true) }
                 BarButton(Icons.Trash, t("Удалить")) { s.trash(items) }
             }

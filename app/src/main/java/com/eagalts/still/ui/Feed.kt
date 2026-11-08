@@ -126,6 +126,15 @@ class FeedController(val grid: LazyGridState) {
     var stackFrom: Rect? = null
     /** Карточки стопки уже на столе (в полёте или в сетке) — стопку в ленте можно убрать, пустого кадра не будет. */
     var pileTaken by mutableStateOf(false)
+    /** Слабый телефон: «Поток» под лентой только бледнеет, без размытия. */
+    var weak = false
+    private val blurs = HashMap<Int, androidx.compose.ui.graphics.RenderEffect>()
+    /** Размытие кадра «Потока» — из кэша по целым пикселям (на кадре ничего не создаётся); 0 и слабый телефон — без него. */
+    fun flowBlur(r: Float): androidx.compose.ui.graphics.RenderEffect? {
+        val k = (r / 2f).toInt() * 2
+        if (k < 2 || weak || android.os.Build.VERSION.SDK_INT < 31) return null
+        return blurs.getOrPut(k) { androidx.compose.ui.graphics.BlurEffect(k.toFloat(), k.toFloat(), androidx.compose.ui.graphics.TileMode.Decal) }
+    }
     /** Масштаб линзы у плитки открытой стопки: стопка в ленте нарисована в её размере и уменьшена линзой. */
     fun pileScale(): Float = if (tilePx > 0) ((stackFrom?.width ?: tilePx.toFloat()) / tilePx).coerceIn(0.3f, 2f) else 1f
     /** Насколько открыта стопка (0…1): лента под ней уходит вглубь и в размытие ровно в такт. */
@@ -240,9 +249,26 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     val scope = rememberCoroutineScope()
     val feed = s.feed
     ctl.cells = feed.cells; ctl.cols = feed.cols
+    val appCtx = androidx.compose.ui.platform.LocalContext.current
+    ctl.weak = remember { (appCtx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)?.isLowRamDevice == true }
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val capsule by animateFloatAsState(if (s.filter != null) 1f else 0f, fineSpring(0.86f, 420f), label = "capsule")
+    // долистал до «Потока» под лентой — сверху капсула «Поток ×»; крестик и «назад» возвращают к свежим кадрам
+    val inFlow by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val lo = ctl.grid.layoutInfo
+            val h = lo.visibleItemsInfo.firstOrNull { it.key == "flow-header" }
+            val headerIdx = s.feed.feedEnd + 1
+            s.filter == null && s.feed.feedEnd < s.feed.cells.size - 1 &&
+                ((h != null && h.offset.y - lo.viewportStartOffset < lo.viewportSize.height * 0.5f) ||
+                    (h == null && (lo.visibleItemsInfo.firstOrNull()?.index ?: 0) > headerIdx))
+        }
+    }
+    val flowIn by animateFloatAsState(if (inFlow) 1f else 0f, fineSpring(0.86f, 420f), label = "flowIn")
+    androidx.activity.compose.BackHandler(inFlow && s.viewing == null && s.stack == null && !s.sheet && s.selection.isEmpty()) {
+        scope.launch { ctl.grid.animateScrollToItem(s.feed.feedEnd.coerceAtLeast(0)) }
+    }
     val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
 
     /*
@@ -315,48 +341,19 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         }
     }
     LaunchedEffect(feed.gen) { ctl.ambient = ambientOf(s, ctl) }
-    // вход в «Поток»: долистал ленту до конца и тянешь дальше — сколько потянуто (px, уже с сопротивлением)
-    val doorPull = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-    val doorClick = remember { DoorClick() }
-    val doorAt = with(density) { FlowDoorPull.dp.toPx() }
     val physics = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
-                // потянул и повёл обратно — сначала уходит потягивание, потом едет лента
-                val d = doorPull.floatValue
-                if (d > 0f && available.y > 0f) {
-                    val v = (d - available.y * 0.5f).coerceAtLeast(0f)
-                    doorPull.floatValue = v; doorClick.update(view, v >= doorAt)
-                    return Offset(0f, (d - v) * 2f)
-                }
-                return Offset.Zero
-            }
             override fun onPostScroll(consumed: Offset, available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
                 ctl.push(consumed.y)
-                // лента кончилась, а палец ведёт дальше — это потягивание к «Потоку» (с сопротивлением вдвое)
-                if (s.filter == null && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput &&
-                    available.y < 0f && !ctl.zooming && s.selection.isEmpty()) {
-                    val v = doorPull.floatValue - available.y * 0.5f
-                    doorPull.floatValue = v; doorClick.update(view, v >= doorAt)
-                    return Offset(0f, available.y)
-                }
                 return Offset.Zero
-            }
-            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
-                val d = doorPull.floatValue
-                if (d <= 0f) return androidx.compose.ui.unit.Velocity.Zero
-                doorClick.ready = false
-                if (d >= doorAt) {
-                    // отпустил за порогом — «Поток» открывается; лента возвращается на место уже под ним
-                    s.open(Filter.Flow)
-                    doorPull.floatValue = 0f
-                } else androidx.compose.animation.core.animate(d, 0f, animationSpec = spring(0.8f, 500f)) { v, _ -> doorPull.floatValue = v.coerceAtLeast(0f) }
-                return available
             }
         }
     }
     // лента открывается в конце — на самом свежем; если были в конце, новый кадр не уводит вверх
-    LaunchedEffect(Unit) { snapshotFlow { ctl.grid.canScrollForward }.collect { ctl.atEnd = !it } }
+    // «в конце» — виден самый свежий кадр ленты (ниже может лежать «Поток» — он не в счёт)
+    LaunchedEffect(Unit) {
+        snapshotFlow { val end = s.feed.feedEnd; ctl.grid.layoutInfo.visibleItemsInfo.any { it.index >= end } }.collect { ctl.atEnd = it }
+    }
     var prevCols by remember { mutableStateOf(feed.cols) }
     var area by remember { mutableStateOf(Size.Zero) }
     LaunchedEffect(feed.gen) {
@@ -364,7 +361,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         val zoomed = feed.cols != prevCols; prevCols = feed.cols
         // смена ступени — не повод уезжать в конец ленты: кадр под пальцами держит applyAnchor
         if (anchor == null && !zoomed && !ctl.pinching && feed.cells.isNotEmpty() && (fresh || ctl.atEnd)) {
-            ctl.grid.requestScrollToItem(feed.cells.size - 1)
+            ctl.grid.requestScrollToItem(feed.feedEnd.coerceAtLeast(0))
             ctl.placed = true; ctl.shownFilter = s.filter
         }
     }
@@ -546,8 +543,6 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 val k = (feed.cols / vcols.value).coerceIn(0.35f, 3f)
                 scaleX = k; scaleY = k
                 translationX = panX.floatValue
-                // потягивание к «Потоку»: лента упруго уходит вверх, открывая вход
-                translationY = -doorPull.floatValue
                 transformOrigin = TransformOrigin(
                     (pivot.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
@@ -569,9 +564,11 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             items(
                 count = n,
                 key = { feed.cells[it].key },
-                contentType = { 1 },
+                span = { if (feed.cells[it] is Cell.FlowHeader) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
+                contentType = { if (feed.cells[it] is Cell.FlowHeader) 2 else 1 },
             ) { i ->
                 when (val c = feed.cells[i]) {
+                    is Cell.FlowHeader -> FlowHeaderRow(s, ctl, c.count)
                     is Cell.Tile -> Tile(
                         s, ctl, c, i, feed.cols,
                         // проявление плиток не нужно нигде (у стопок свой веер, у удаления — пыль): лента его принимала
@@ -584,27 +581,21 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     )
                 }
             }
-            // срок до «Потока» — в самом «Потоке», последней строкой, у знака
-            if (s.filter == Filter.Flow) item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) { FlowTimer(s) }
+            // срок до «Потока» — в самом «Потоке», последней строкой: и в фильтре, и в конце «Потока» под лентой
+            if (s.filter == Filter.Flow || (s.filter == null && feed.feedEnd < n - 1))
+                item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) {
+                    // и место под знаком: без линзы поле снизу маленькое, и ползунок уходил под него
+                    androidx.compose.foundation.layout.Column { FlowTimer(s); if (!lensOn) Spacer(Modifier.height(88.dp)) }
+                }
         }
         if (s.loaded && feed.cells.isEmpty() && s.filter != Filter.Flow) Empty(s.filter)
-        // вход в «Поток» — под самым свежим рядом главной ленты
-        if (s.filter == null && feed.cells.isNotEmpty() && !ctl.zooming) FlowDoor(
-            s,
-            bottomOfFeed = {
-                val lo = ctl.grid.layoutInfo
-                lo.visibleItemsInfo.lastOrNull { it.index == lo.totalItemsCount - 1 }
-                    ?.let { (it.offset.y + it.size.height - lo.viewportStartOffset).toFloat() }
-            },
-            pull = { doorPull.floatValue },
-        )
         // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
         val scrim by animateFloatAsState(if (overPhotos) 1f else 0f, tween(220), label = "scrim")
         if (scrim > 0.001f) Box(
             Modifier.fillMaxWidth().height(top + 20.dp).graphicsLayer { alpha = scrim }
                 .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.34f), Color.Black.copy(alpha = 0f))))
         )
-        FilterCapsule(s, top, capsule)
+        FilterCapsule(s, top, maxOf(capsule, flowIn), onCloseFlow = { scope.launch { ctl.grid.animateScrollToItem(s.feed.feedEnd.coerceAtLeast(0)) } })
         FastScroll(s, ctl, top, bottom)
     }
 }
@@ -662,6 +653,12 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 // заливка застревала, и кадр, долистанный до центра, оставался мутным. На светлой теме — слабее.
                 val haze = if (leaving) 0f else pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
                 alpha = base * (1f - haze).coerceIn(0f, 1f)
+                // «Поток» под лентой: внизу экрана — бледный и размытый, к середине — проявляется до чёткого
+                if (c.flow) {
+                    val k = flowClarity(spot.y + spot.h / 2f, vp.height.toFloat())
+                    alpha *= 0.22f + 0.78f * k
+                    renderEffect = ctl.flowBlur((1f - k) * 14.dp.toPx())
+                } else renderEffect = null
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
                 // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
@@ -738,6 +735,13 @@ class Thumb(val value: ImageBitmap?, val fresh: Boolean)
 /** Миниатюра плитки: из памяти — сразу (без мигания), иначе декодируется; плитка ушла — декодирование отменено. */
 @Composable
 fun rememberThumb(s: Still, item: MediaItem, px: Int): Thumb {
+    // скрытый кадр — только очень размытая копия (крошечная, растянутая со сглаживанием)
+    if (item.id in s.veiled) {
+        val st = produceState(Thumb(s.thumbs.peekVeil(item.id)?.asImageBitmap(), false), item.id, true) {
+            if (value.value == null) s.thumbs.loadVeil(item)?.let { value = Thumb(it.asImageBitmap(), true) }
+        }
+        return st.value
+    }
     val cached = remember(item.id) { s.thumbs.peek(item.id, px)?.asImageBitmap() }
     val state = produceState(Thumb(cached, false), item.id, px / 64) {
         if (value.value != null && s.thumbs.peek(item.id, px) != null) return@produceState
@@ -796,10 +800,11 @@ private fun Empty(f: Filter?) {
 
 /** Капсула фильтра сверху: что показано и крестик, который возвращает всю ленту. */
 @Composable
-private fun FilterCapsule(s: Still, top: Dp, shown: Float) {
+private fun FilterCapsule(s: Still, top: Dp, shown: Float, onCloseFlow: () -> Unit) {
     val p = LocalPalette.current
     var last by remember { mutableStateOf<Filter?>(null) }
-    s.filter?.let { last = it }
+    // без фильтра капсула видна только в «Потоке» под лентой
+    last = s.filter ?: if (shown > 0.001f) Filter.Flow else last
     val f = last ?: return
     if (shown <= 0.001f) return
     Box(Modifier.fillMaxWidth().padding(top = top + 8.dp), contentAlignment = Alignment.TopCenter) {
@@ -813,7 +818,7 @@ private fun FilterCapsule(s: Still, top: Dp, shown: Float) {
         ) {
             Text(f.title, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont, maxLines = 1,
                 modifier = Modifier.padding(vertical = 10.dp))
-            Box(Modifier.size(40.dp).testTag("filter-close").bouncy(0.8f) { s.open(null) }, contentAlignment = Alignment.Center) {
+            Box(Modifier.size(40.dp).testTag("filter-close").bouncy(0.8f) { if (s.filter == null) onCloseFlow() else s.open(null) }, contentAlignment = Alignment.Center) {
                 Icon(Icons.Close, t("Вся лента"), tint = p.muted, modifier = Modifier.size(18.dp))
             }
         }
@@ -1046,3 +1051,35 @@ internal fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
  * наверх вставал следующий кадр, и казалось, что удаление не работает), одиночный кадр — себя.
  */
 internal fun idsOf(c: Cell.Tile): List<Long> = if (c.entry.stacked) c.entry.members.map { it.id } else listOf(c.item.id)
+
+
+/**
+ * Чёткость кадра «Потока» по его месту на экране: ниже 90% высоты — 0 (бледный, размытый), с середины и выше — 1.
+ * В покое «Поток» лежит сразу под свежим рядом (≈ на 70% высоты) — он едва проступает; долистал — проявился.
+ */
+fun flowClarity(centerY: Float, viewport: Float): Float =
+    if (viewport <= 0f) 1f else ((viewport * 0.9f - centerY) / (viewport * 0.4f)).coerceIn(0f, 1f)
+
+/** Заголовок «Потока» под самым свежим кадром ленты: проявляется вместе с его кадрами. */
+@Composable
+private fun FlowHeaderRow(s: Still, ctl: FeedController, count: Int) {
+    val p = LocalPalette.current
+    val spot = remember { Spot() }
+    val steps = com.eagalts.still.media.Ephemeral.STEPS
+    val idx = steps.indexOfFirst { it >= s.flowTtl }.let { if (it < 0) steps.size - 1 else it }
+    Row(
+        Modifier.fillMaxWidth().testTag("flow-header")
+            .onPlaced { val o = it.positionInParent(); spot.y = o.y; spot.h = it.size.height.toFloat() }
+            .graphicsLayer {
+                val k = flowClarity(spot.y + spot.h / 2f, ctl.grid.layoutInfo.viewportSize.height.toFloat())
+                alpha = 0.3f + 0.7f * k
+            }
+            .padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(t("Поток"), color = p.text, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, fontFamily = UiFont)
+        Spacer(Modifier.width(10.dp))
+        Text(t("{0} · уходят через {1}", count, flowStep(idx)), color = p.muted, fontSize = 14.sp, fontFamily = UiFont,
+            modifier = Modifier.padding(bottom = 3.dp))
+    }
+}
