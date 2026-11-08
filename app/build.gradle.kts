@@ -12,8 +12,8 @@ android {
         applicationId = "com.eagalts.still"
         minSdk = 29
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.1.23"
+        versionCode = 25
+        versionName = "0.1.24"
         // модель стопок — нативная библиотека: 64-битные телефоны, 32-битные слабые и эмулятор (x86 без нужды)
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }

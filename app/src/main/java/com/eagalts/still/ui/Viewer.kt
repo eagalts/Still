@@ -1,5 +1,8 @@
 package com.eagalts.still.ui
 
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.foundation.layout.offset
+
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
@@ -91,6 +94,21 @@ fun fit(w: Int, h: Int, box: Size): Rect {
     return Rect((box.width - fw) / 2f, (box.height - fh) / 2f, (box.width + fw) / 2f, (box.height + fh) / 2f)
 }
 
+/**
+ * Где кадр стоит в просмотре. Подписи видны ([k] → 1) — кадр, который залез бы под них (скриншот во весь экран,
+ * высокое фото), встаёт между верхними подписями и кнопками; подписи спрятаны — во весь экран. Кадр, который и так
+ * помещается между ними, не двигается.
+ */
+fun shownRect(w: Int, h: Int, box: Size, top: Float, bottom: Float, k: Float): Rect {
+    val full = fit(w, h, box)
+    if (k <= 0f || (full.top >= top && full.bottom <= box.height - bottom)) return full
+    val inner = fit(w, h, Size(box.width, (box.height - top - bottom).coerceAtLeast(1f))).translate(0f, top)
+    return lerpRect(full, inner, k.coerceIn(0f, 1f))
+}
+
+/** Для тестов: где нарисован кадр текущей страницы просмотра. */
+internal object ViewerProbe { var rect: Rect? = null }
+
 private fun lerpRect(a: Rect, b: Rect, f: Float) =
     Rect(lerp(a.left, b.left, f), lerp(a.top, b.top, f), lerp(a.right, b.right, f), lerp(a.bottom, b.bottom, f))
 
@@ -117,6 +135,9 @@ fun Viewer(s: Still, ctl: FeedController) {
     var dismissing by remember(v) { mutableStateOf(false) }
     var chrome by remember(v) { mutableStateOf(true) }
     var zoomed by remember(v) { mutableStateOf(false) }
+    // высота подписей сверху и кнопок снизу — меряются, как только подписи собраны (кадр встаёт между ними)
+    var chromeTop by remember { mutableStateOf(0f) }
+    var chromeBottom by remember { mutableStateOf(0f) }
     // подробности: свайп вверх — кадр уезжает вверх, снизу выезжает панель (0 — закрыта, 1 — открыта)
     val info = remember(v) { Animatable(0f) }
 
@@ -185,9 +206,12 @@ fun Viewer(s: Still, ctl: FeedController) {
             if (it != null && it.video && f >= 0.999f && !closing) pb.playVideo(it.id, s.lib.uri(it)) else pb.stop()
         }
         val thumb = rememberLarge(s, item)
+        // подписи видны (или вот-вот появятся) — кадр уступает им место; тап, зум, смахивание, подробности — во весь экран
+        val chromeOn = chrome && !dismissing && !closing && !zoomed && info.value < 0.05f
+        val room by animateFloatAsState(if (chromeOn) 1f else 0f, fineSpring(1f, 420f), label = "room")
         if (inFlight) {
             // летящий кадр: от квадрата плитки к целому кадру, скругление плитки → 0
-            val target = fit(item.width, item.height, box).let { r ->
+            val target = shownRect(item.width, item.height, box, chromeTop, chromeBottom, room).let { r ->
                 val k = 1f - pull * 0.45f
                 val c = r.center + drag.value
                 Rect(c.x - r.width * k / 2f, c.y - r.height * k / 2f, c.x + r.width * k / 2f, c.y + r.height * k / 2f)
@@ -220,6 +244,7 @@ fun Viewer(s: Still, ctl: FeedController) {
             val it = v.items[page]
             Page(
                 s, it, box, pb, active = page == pager.settledPage && !inFlight,
+                rect = shownRect(it.width, it.height, box, chromeTop, chromeBottom, room),
                 onTap = { if (info.value > 0.01f) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else chrome = !chrome },
                 infoOpen = { info.value > 0.01f },
                 onInfoDrag = { dy -> scope.launch { info.snapTo((info.value - dy / panelH).coerceIn(0f, 1.15f)) } },
@@ -241,8 +266,12 @@ fun Viewer(s: Still, ctl: FeedController) {
             )
         }
 
-        val ui by animateFloatAsState(if (chrome && !dismissing && !closing && f > 0.98f && info.value < 0.05f) 1f else 0f, tween(180), label = "chrome")
-        if (ui > 0.001f) Chrome(s, item, v.fromFilter != null, ui, pb, onShowInFeed = { s.showInFeed(item) })
+        val ui by animateFloatAsState(if (chromeOn && f > 0.98f) 1f else 0f, tween(180), label = "chrome")
+        // собраны и пока невидимы — чтобы их размер был известен ещё до того, как кадр долетит
+        if (ui > 0.001f || chromeOn) Chrome(
+            s, item, v.fromFilter != null, ui, pb, onShowInFeed = { s.showInFeed(item) },
+            onTop = { chromeTop = it }, onBottom = { chromeBottom = it },
+        )
         if (info.value > 0.001f) InfoPanel(s, item, panelH, info.value)
     }
 }
@@ -318,7 +347,7 @@ private fun rememberLarge(s: Still, item: MediaItem): ImageBitmap? {
  */
 @Composable
 private fun Page(
-    s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean,
+    s: Still, item: MediaItem, box: Size, pb: Playback, active: Boolean, rect: Rect,
     infoOpen: () -> Boolean, onInfoDrag: (Float) -> Unit, onInfoEnd: (Float) -> Unit,
     onTap: () -> Unit, onZoom: (Boolean) -> Unit, onDrag: (Offset) -> Unit, onDragEnd: (Float) -> Unit,
 ) {
@@ -342,7 +371,6 @@ private fun Page(
             region = withContext(Dispatchers.IO) { decodeRegion(s, item, box, fit(item.width, item.height, box), k, pn) }
         }
     }
-    val rect = fit(item.width, item.height, box)
     val view = LocalView.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
     // живое фото: зажал — оживает, отпустил — замирает; тап после удержания — не тап
@@ -484,6 +512,7 @@ private fun Page(
         }) {
             val b = full ?: thumb ?: return@Canvas
             drawCover(b, rect)
+            if (active) ViewerProbe.rect = rect
             region?.let { (bmp, src) ->
                 val dx = rect.left + src.left / item.width * rect.width; val dy = rect.top + src.top / item.height * rect.height
                 val dw = src.width / item.width * rect.width; val dh = src.height / item.height * rect.height
@@ -500,7 +529,8 @@ private fun Page(
         if (mine || shown > 0.01f) AndroidView(
             factory = { c -> android.view.TextureView(c) },
             update = { tv -> if (mine) pb.attach(tv) },
-            modifier = Modifier.align(Alignment.Center)
+            // в рамке кадра: кадр может стоять не по центру — между подписями
+            modifier = Modifier.offset { androidx.compose.ui.unit.IntOffset(rect.left.toInt(), rect.top.toInt()) }
                 .size(with(density) { rect.width.toDp() }, with(density) { rect.height.toDp() })
                 .graphicsLayer { alpha = shown },
         )
@@ -509,13 +539,17 @@ private fun Page(
 
 /** Немногие элементы просмотра: время сверху, три действия снизу. Тап по фото — прячутся. */
 @Composable
-private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb: Playback, onShowInFeed: () -> Unit) {
+private fun Chrome(
+    s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb: Playback, onShowInFeed: () -> Unit,
+    onTop: (Float) -> Unit, onBottom: (Float) -> Unit,
+) {
     val left = s.left(item)
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = a.coerceIn(0f, 1f) }) {
         Column(
             Modifier.fillMaxWidth().background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent))
-            ).statusBarsPadding().padding(top = 6.dp, bottom = 22.dp),
+            ).onGloballyPositioned { onTop(it.size.height.toFloat()) }.testTag("viewer-top")
+                .statusBarsPadding().padding(top = 6.dp, bottom = 22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -541,7 +575,8 @@ private fun Chrome(s: Still, item: MediaItem, fromFilter: Boolean, a: Float, pb:
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(
                 androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000)))
-            ).navigationBarsPadding().padding(top = 24.dp, bottom = 10.dp),
+            ).onGloballyPositioned { onBottom(it.size.height.toFloat()) }.testTag("viewer-bottom")
+                .navigationBarsPadding().padding(top = 24.dp, bottom = 10.dp),
         ) {
         if (item.video && pb.owner == item.id) VideoBar(pb)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {

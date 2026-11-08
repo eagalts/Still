@@ -13,6 +13,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -642,6 +643,31 @@ class FeedUiTest {
         val screen = rule.onNodeWithTag("stack").fetchSemanticsNode().boundsInRoot
         rule.onNodeWithTag("stack").performTouchInput { click(androidx.compose.ui.geometry.Offset(screen.width / 2f, screen.height * 0.85f)) }
         until(3000) { still.stack == null }
+    }
+
+    /**
+     * Скриншот во весь экран в просмотре не лежит под подписями и кнопками: пока они видны, кадр стоит между ними
+     * (раньше «Оставить» наезжало на заголовок скриншота, сердечко — на его кнопки); тап — подписи прячутся, кадр
+     * разворачивается во весь экран.
+     */
+    @Test fun tallShotStandsBetweenViewerChrome() {
+        show()
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == 500L }) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithTag("tile-500").performClick()
+        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+        shot("viewer-tall")
+        val top = rule.onNodeWithTag("viewer-top").fetchSemanticsNode().boundsInRoot
+        val bottom = rule.onNodeWithTag("viewer-bottom").fetchSemanticsNode().boundsInRoot
+        val r = com.eagalts.still.ui.ViewerProbe.rect!!
+        assertTrue("кадр залез под подписи сверху: ${r.top} < ${top.bottom}", r.top >= top.bottom - 1f)
+        assertTrue("кадр залез под кнопки снизу: ${r.bottom} > ${bottom.top}", r.bottom <= bottom.top + 1f)
+        val box = rule.onNodeWithTag("viewer").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("viewer").performTouchInput { click(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height / 2f)) }
+        rule.mainClock.advanceTimeBy(1500); rule.waitForIdle()
+        shot("viewer-tall-full")
+        val full = com.eagalts.still.ui.ViewerProbe.rect!!
+        assertTrue("без подписей кадр не развернулся: ${full.height} из ${box.height}", full.height > r.height + 20f)
     }
 
     @Test fun tapOpensViewerAndBackFliesHome() {
