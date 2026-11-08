@@ -187,7 +187,23 @@ fun Viewer(s: Still, ctl: FeedController) {
             if (v.external) s.onExternalClosed()
         }
     }
-    BackHandler { if (info.value > 0.01f) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else close() }
+    // «назад» жестом: кадр уже уменьшается и отъезжает за пальцем, как при смахивании вниз, лента проступает;
+    // отпустил — летит в свою плитку; передумал — возвращается. Открыты подробности — «назад» закрывает их.
+    androidx.activity.compose.PredictiveBackHandler { progress ->
+        val infoOpen = info.value > 0.01f
+        try {
+            progress.collect { ev ->
+                if (!infoOpen && !closing) {
+                    dismissing = true
+                    drag.snapTo(Offset(0f, ev.progress.coerceIn(0f, 1f) * view.height * 0.22f))
+                }
+            }
+            if (infoOpen) scope.launch { info.animateTo(0f, spring(0.86f, 420f)) } else close()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            if (!closing) scope.launch { drag.animateTo(Offset.Zero, spring(0.8f, 500f)); dismissing = false }
+            throw c
+        }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().testTag("viewer")) {
         val box = with(density) { Size(maxWidth.toPx(), maxHeight.toPx()) }

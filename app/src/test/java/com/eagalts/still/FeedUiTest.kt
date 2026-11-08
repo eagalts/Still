@@ -635,6 +635,32 @@ class FeedUiTest {
         until { still.feed.cells.any { it.key == 600L } }
     }
 
+    /**
+     * «Назад» жестом от края: стопка сворачивается за пальцем ещё до того, как его отпустили (лента под ней
+     * проясняется); вернул палец — разворачивается обратно; отпустил — закрывается. Раньше полсекунды жеста ничего
+     * не происходило, а потом стопка схлопывалась рывком.
+     */
+    @Test fun predictiveBackFoldsStackWithFinger() {
+        show()
+        rule.onNodeWithTag("tile-103").performClick()
+        rule.mainClock.advanceTimeBy(1200); rule.waitForIdle()
+        val d = rule.activity.onBackPressedDispatcher
+        fun ev(p: Float) = androidx.activity.BackEventCompat(1000f, 1200f, p, androidx.activity.BackEventCompat.EDGE_RIGHT)
+        rule.runOnIdle { d.dispatchOnBackStarted(ev(0f)) }
+        rule.runOnIdle { d.dispatchOnBackProgressed(ev(0.3f)) }
+        rule.runOnIdle { d.dispatchOnBackProgressed(ev(0.6f)) }
+        rule.mainClock.advanceTimeBy(100); rule.waitForIdle()
+        assertTrue("стопка не сворачивается за пальцем: ${ctl.stackVeil}", ctl.stackVeil < 0.8f)
+        assertTrue(still.stack != null)
+        rule.runOnIdle { d.dispatchOnBackCancelled() }
+        rule.mainClock.advanceTimeBy(1000); rule.waitForIdle()
+        assertTrue("передумал — стопка не развернулась: ${ctl.stackVeil}", ctl.stackVeil > 0.99f && still.stack != null)
+        rule.runOnIdle { d.dispatchOnBackStarted(ev(0f)) }
+        rule.runOnIdle { d.dispatchOnBackProgressed(ev(0.5f)) }
+        rule.runOnIdle { d.onBackPressed() }
+        until(3000) { still.stack == null }
+    }
+
     /** Тап мимо кадров стопки — она складывается обратно. */
     @Test fun tapOutsideClosesStack() {
         show()

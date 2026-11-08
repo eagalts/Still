@@ -171,7 +171,22 @@ fun StackView(s: Still, ctl: FeedController) {
         }
         onDispose { ctl.overlayBounds = null; ctl.overlayReveal = null; ctl.stackVeil = 0f }
     }
-    BackHandler { close() }
+    // «назад» — предиктивный жест Android: тянешь от края — сетка уже сворачивается к своей стопке в такт пальцу
+    // (до половины пути), лента проясняется; отпустил — доезжает отсюда же; передумал — разворачивается обратно
+    androidx.activity.compose.PredictiveBackHandler { progress ->
+        try {
+            progress.collect { ev ->
+                if (!closing) {
+                    val p = ev.progress.coerceIn(0f, 1f)
+                    open.snapTo(1f - 0.5f * (1f - (1f - p) * (1f - p)))
+                }
+            }
+            close()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            if (!closing) scope.launch { open.animateTo(1f, spring(0.86f, 500f, visibilityThreshold = FineThreshold)) }
+            throw c
+        }
+    }
 
     val drag = remember {
         object : NestedScrollConnection {
