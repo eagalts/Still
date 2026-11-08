@@ -670,6 +670,33 @@ class FeedUiTest {
         assertTrue("без подписей кадр не развернулся: ${full.height} из ${box.height}", full.height > r.height + 20f)
     }
 
+    /**
+     * Вход в «Поток» — под самым свежим рядом: долистал до конца и потянул дальше — «Поток» открылся; чуть потянул
+     * и отпустил — лента вернулась на место, ничего не открылось.
+     */
+    @Test fun pullPastNewestOpensFlow() {
+        show()
+        rule.onNodeWithTag("flow-door").assertExists()
+        rule.onNodeWithText("Поток").assertExists()
+        shot("flow-door")
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        // чуть-чуть — не открывается
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.6f))
+            repeat(5) { moveBy(androidx.compose.ui.geometry.Offset(0f, -12f)) }
+            up()
+        }
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        assertEquals(null, still.filter)
+        // дальше порога — «Поток»
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.8f))
+            repeat(30) { moveBy(androidx.compose.ui.geometry.Offset(0f, -25f)) }
+            up()
+        }
+        until(3000) { still.filter == Filter.Flow }
+    }
+
     @Test fun tapOpensViewerAndBackFliesHome() {
         show()
         rule.onNodeWithTag("tile-300").performClick()

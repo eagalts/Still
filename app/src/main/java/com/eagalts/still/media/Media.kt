@@ -40,6 +40,8 @@ object Classify {
      * По `RELATIVE_PATH`, имени папки и пакету-владельцу (где Android его даёт). Сначала шум, потом камера:
      * «DCIM/Screenshots» — это скриншоты, хоть и в DCIM.
      */
+    private val dcimCamera = Regex("^dcim/(\\d{3}[a-z_]*|opencamera|gcam)[^/]*/$")
+
     fun source(relativePath: String?, bucket: String?, owner: String?): Source {
         val p = (relativePath ?: "").lowercase().let { if (it.endsWith("/")) it else "$it/" }
         val b = (bucket ?: "").lowercase()
@@ -48,7 +50,11 @@ object Classify {
             "screenshot" in p || "screenshot" in b || "screenrecord" in p || "screen record" in p -> Source.SCREENSHOT
             messengers.any { it in p } || messengerPkgs.any { o.startsWith(it) } -> Source.MESSENGER
             p.startsWith("download/") -> Source.DOWNLOAD
-            p.startsWith("dcim/") || "camera" in o -> Source.CAMERA
+            // камера — снятое приложением камеры, DCIM/Camera и папки камер вида DCIM/100ANDRO; остальное в DCIM —
+            // это приложения, сохранившие туда картинки (DCIM/Reddit, DCIM/Snapchat…): мемы и сохранёнки — временное
+            "camera" in o -> Source.CAMERA
+            p.startsWith("dcim/camera") || dcimCamera.matches(p) -> Source.CAMERA
+            p.startsWith("dcim/") && o.isEmpty() && p.count { it == '/' } <= 1 -> Source.CAMERA
             else -> Source.OTHER
         }
     }

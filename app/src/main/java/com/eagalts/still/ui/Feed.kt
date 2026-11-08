@@ -311,11 +311,43 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         }
     }
     LaunchedEffect(feed.gen) { ctl.ambient = ambientOf(s, ctl) }
+    // вход в «Поток»: долистал ленту до конца и тянешь дальше — сколько потянуто (px, уже с сопротивлением)
+    val doorPull = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val doorClick = remember { DoorClick() }
+    val doorAt = with(density) { FlowDoorPull.dp.toPx() }
     val physics = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
+                // потянул и повёл обратно — сначала уходит потягивание, потом едет лента
+                val d = doorPull.floatValue
+                if (d > 0f && available.y > 0f) {
+                    val v = (d - available.y * 0.5f).coerceAtLeast(0f)
+                    doorPull.floatValue = v; doorClick.update(view, v >= doorAt)
+                    return Offset(0f, (d - v) * 2f)
+                }
+                return Offset.Zero
+            }
             override fun onPostScroll(consumed: Offset, available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
                 ctl.push(consumed.y)
+                // лента кончилась, а палец ведёт дальше — это потягивание к «Потоку» (с сопротивлением вдвое)
+                if (s.filter == null && source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput &&
+                    available.y < 0f && !ctl.zooming && s.selection.isEmpty()) {
+                    val v = doorPull.floatValue - available.y * 0.5f
+                    doorPull.floatValue = v; doorClick.update(view, v >= doorAt)
+                    return Offset(0f, available.y)
+                }
                 return Offset.Zero
+            }
+            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                val d = doorPull.floatValue
+                if (d <= 0f) return androidx.compose.ui.unit.Velocity.Zero
+                doorClick.ready = false
+                if (d >= doorAt) {
+                    // отпустил за порогом — «Поток» открывается; лента возвращается на место уже под ним
+                    s.open(Filter.Flow)
+                    doorPull.floatValue = 0f
+                } else androidx.compose.animation.core.animate(d, 0f, animationSpec = spring(0.8f, 500f)) { v, _ -> doorPull.floatValue = v.coerceAtLeast(0f) }
+                return available
             }
         }
     }
@@ -510,6 +542,8 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 val k = (feed.cols / vcols.value).coerceIn(0.35f, 3f)
                 scaleX = k; scaleY = k
                 translationX = panX.floatValue
+                // потягивание к «Потоку»: лента упруго уходит вверх, открывая вход
+                translationY = -doorPull.floatValue
                 transformOrigin = TransformOrigin(
                     (pivot.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
@@ -550,6 +584,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             if (s.filter == Filter.Flow) item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) { FlowTimer(s) }
         }
         if (s.loaded && feed.cells.isEmpty() && s.filter != Filter.Flow) Empty(s.filter)
+        // вход в «Поток» — под самым свежим рядом главной ленты
+        if (s.filter == null && feed.cells.isNotEmpty() && !ctl.zooming) FlowDoor(
+            s,
+            bottomOfFeed = {
+                val lo = ctl.grid.layoutInfo
+                lo.visibleItemsInfo.lastOrNull { it.index == lo.totalItemsCount - 1 }
+                    ?.let { (it.offset.y + it.size.height - lo.viewportStartOffset).toFloat() }
+            },
+            pull = { doorPull.floatValue },
+        )
         // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
         val scrim by animateFloatAsState(if (overPhotos) 1f else 0f, tween(220), label = "scrim")
         if (scrim > 0.001f) Box(

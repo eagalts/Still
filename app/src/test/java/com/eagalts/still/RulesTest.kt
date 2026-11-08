@@ -37,6 +37,13 @@ class RulesTest {
         assertEquals(Source.MESSENGER, Classify.source("Android/media/com.whatsapp/WhatsApp/Media/", "WhatsApp Images", "com.whatsapp"))
         assertEquals(Source.DOWNLOAD, Classify.source("Download/", "Download", null))
         assertEquals(Source.OTHER, Classify.source("Pictures/Edits/", "Edits", null))
+        // приложения сохраняют картинки в DCIM/<своя папка> — это не камера (мем из Reddit ушёл бы в «Поток»)
+        assertEquals(Source.OTHER, Classify.source("DCIM/Reddit/", "Reddit", "com.reddit.frontpage"))
+        assertEquals(Source.OTHER, Classify.source("DCIM/Pinterest/", "Pinterest", null))
+        // а камеры некоторых телефонов снимают в DCIM/100ANDRO, DCIM/100MEDIA, кадры прямо в DCIM/
+        assertEquals(Source.CAMERA, Classify.source("DCIM/100ANDRO/", "100ANDRO", null))
+        assertEquals(Source.CAMERA, Classify.source("DCIM/", "DCIM", null))
+        assertEquals(Source.CAMERA, Classify.source("DCIM/Camera/", "Camera", "com.google.android.apps.photos"))
     }
 
     /** Временное уходит в «Поток» через выбранный срок: по умолчанию 3 дня, ползунком — от часа до трёх месяцев. */
