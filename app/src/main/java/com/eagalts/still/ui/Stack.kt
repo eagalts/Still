@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -70,6 +72,31 @@ import com.eagalts.still.t
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/**
+ * Геометрия стопки отпечатков — одна на рисунок в ленте ([drawPile]) и на полёт кадров при открытии и закрытии
+ * ([StackFlight]): в последнем кадре полёта карточки совпадают с нарисованной стопкой до пикселя.
+ * Доли — от стороны плитки: поля, скругление, белая кромка, тень; у нижних карточек — поворот, сдвиг и притемнение.
+ */
+object Pile {
+    const val MARGIN = 0.08f
+    const val RADIUS = 0.07f
+    const val EDGE = 0.022f
+    const val DROP = 0.014f
+    class Card(val deg: Float, val dx: Float, val dy: Float, val dim: Float)
+    val TOP = Card(0f, 0f, 0f, 0f)
+    val B1 = Card(6f, 0.018f, -0.006f, 0.12f)
+    val B2 = Card(-8f, -0.018f, 0.008f, 0.22f)
+    fun paper(p: Palette) = if (p.dark) Color(0xFFECEAE5) else Color.White
+    fun shadow(p: Palette) = Color.Black.copy(alpha = if (p.dark) 0.42f else 0.2f)
+
+    /** Какие кадры выглядывают из-под верхнего: середина и последний из остальных (второй — если он другой). */
+    fun backs(e: com.eagalts.still.media.Entry): Pair<MediaItem?, MediaItem?> {
+        val o = e.members.filter { it.id != e.cover.id }
+        val b1 = o.getOrNull(o.size / 2); val b2 = o.lastOrNull()?.takeIf { it != b1 }
+        return b1 to b2
+    }
+}
+
 /** Пути карточек стопки — один раз на размер плитки, не на каждом кадре. */
 class PileCache {
     var side = -1f
@@ -90,20 +117,20 @@ fun DrawScope.drawPile(
     if (c.side != side) {
         c.side = side
         // поля под повёрнутые карточки: угол 8° выносит угол карточки на ~5,5% стороны, сдвиг — ещё ~2%
-        val m = side * 0.08f
-        val r = (side * 0.07f).coerceIn(2.dp.toPx(), 10.dp.toPx())
-        val edge = (side * 0.022f).coerceIn(1.dp.toPx(), 2.5.dp.toPx())
+        val m = side * Pile.MARGIN
+        val r = (side * Pile.RADIUS).coerceIn(2.dp.toPx(), 10.dp.toPx())
+        val edge = (side * Pile.EDGE).coerceIn(1.dp.toPx(), 2.5.dp.toPx())
         val card = Rect(m, m, side - m, side - m)
         c.innerRect = card.deflate(edge)
         c.outer.reset(); c.outer.addRoundRect(RoundRect(card, CornerRadius(r)))
         c.inner.reset(); c.inner.addRoundRect(RoundRect(c.innerRect, CornerRadius((r - edge).coerceAtLeast(0f))))
     }
-    val paper = if (p.dark) Color(0xFFECEAE5) else Color.White
-    val drop = side * 0.014f
+    val paper = Pile.paper(p)
+    val drop = side * Pile.DROP
     fun card(b: ImageBitmap?, deg: Float, dx: Float, dy: Float, dim: Float) {
         translate(dx * side, dy * side) {
             rotate(deg, Offset(side / 2f, side / 2f)) {
-                translate(0f, drop) { drawPath(c.outer, Color.Black.copy(alpha = if (p.dark) 0.42f else 0.2f)) }
+                translate(0f, drop) { drawPath(c.outer, Pile.shadow(p)) }
                 drawPath(c.outer, paper)
                 clipPath(c.inner) {
                     if (b != null) drawCover(b, c.innerRect) else drawRect(ph)
@@ -113,18 +140,19 @@ fun DrawScope.drawPile(
         }
     }
     // повороты и сдвиги подобраны так, чтобы углы карточек и тень оставались в полях 8%
-    card(b2, -8f, -0.018f, 0.008f, 0.22f)
-    card(b1, 6f, 0.018f, -0.006f, 0.12f)
+    card(b2, Pile.B2.deg, Pile.B2.dx, Pile.B2.dy, Pile.B2.dim)
+    card(b1, Pile.B1.deg, Pile.B1.dx, Pile.B1.dy, Pile.B1.dim)
     // стопка открыта — верхний снимок «вынут» (он сейчас в сетке стопки), нижние лежат на месте
     if (!coverOut) card(cover, 0f, 0f, 0f, 0f)
     if (shade > 0.01f) drawRect(p.page, alpha = shade)
 }
 
 /**
- * Открытая стопка — как папка в iOS: стопка разворачивается в сетку своих кадров. В первый миг вся сетка умещается
- * ровно в плитку стопки (крошечные кадры на её месте), потом растёт на весь экран; лента в это время отступает вглубь
- * и уходит в размытие под почти сплошной фон. Закрытие — то же назад, кадр в кадр: размытие уходит вместе с полётом,
- * и стопка проявляется на месте ровно тогда, когда сетка в неё сложилась. Тап по кадру — просмотр только этих кадров.
+ * Открытая стопка — как стопка отпечатков, которую разложили на столе. Открытие: верхний снимок поднимается со
+ * стопки и встаёт на своё место в сетке, остальные выходят из-под него на свои; лента в это время уходит вглубь
+ * и в размытие. Закрытие — то же назад, кадр в кадр: снимки складываются в стопку, верхний ложится сверху,
+ * два выглядывающих — под своими углами, остальные — под ними; в последнем кадре это ровно та стопка, что в ленте.
+ * Тап по кадру — просмотр только этих кадров.
  */
 @Composable
 fun StackView(s: Still, ctl: FeedController) {
@@ -138,22 +166,25 @@ fun StackView(s: Still, ctl: FeedController) {
     var closing by remember(e.key) { mutableStateOf(false) }
     val slots = remember { HashMap<Long, Rect>() }
     val grid = rememberLazyGridState()
-    var gridBox by remember { mutableStateOf(Rect.Zero) }
+    val (b1, b2) = remember(e) { Pile.backs(e) }
+    // во время полёта сетка спрятана — кадры летят отдельным слоем поверх всего (сетка обрезала бы их по краю)
+    val settled by remember { androidx.compose.runtime.derivedStateOf { open.value >= 0.999f && !closing } }
 
     fun close() {
         if (closing) return
         closing = true
         scope.launch {
-            ctl.stackFrom = ctl.feedBounds(e.cover.id) ?: ctl.stackFrom
+            // куда складываться — то же место, откуда открывали: лента под стопкой не двигалась, а сейчас она отодвинута
+            // вглубь (уменьшена) — пересчёт отсюда дал бы смещённую стопку и прыжок в последнем кадре
             launch { pull.animateTo(0f, spring(1f, 500f)) }
-            open.animateTo(0f, spring(1f, 520f, visibilityThreshold = FineThreshold))
+            open.animateTo(0f, spring(1f, 420f, visibilityThreshold = FineThreshold))
             ctl.stackVeil = 0f
             s.closeStack()
         }
     }
     LaunchedEffect(e.key) {
         // лёгкая живость (без заметного перелёта); всё, что не может быть отрицательным, ниже зажато
-        open.animateTo(1f, spring(0.86f, 380f, visibilityThreshold = FineThreshold))
+        open.animateTo(1f, spring(0.88f, 360f, visibilityThreshold = FineThreshold))
     }
     // лента под стопкой — в такт с ней (и при смахивании вниз — тоже)
     LaunchedEffect(e.key) {
@@ -169,7 +200,7 @@ fun StackView(s: Still, ctl: FeedController) {
                 grid.requestScrollToItem(i)
             }
         }
-        onDispose { ctl.overlayBounds = null; ctl.overlayReveal = null; ctl.stackVeil = 0f }
+        onDispose { ctl.overlayBounds = null; ctl.overlayReveal = null; ctl.stackVeil = 0f; ctl.pileTaken = false }
     }
     // «назад» — предиктивный жест Android: тянешь от края — сетка уже сворачивается к своей стопке в такт пальцу
     // (до половины пути), лента проясняется; отпустил — доезжает отсюда же; передумал — разворачивается обратно
@@ -220,35 +251,11 @@ fun StackView(s: Still, ctl: FeedController) {
         // фон почти сплошной: под ним лента только угадывается — ничего не спорит с кадрами стопки
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = ctl.stackVeil.coerceIn(0f, 1f) }
             .background(p.page.copy(alpha = if (p.dark) 0.8f else 0.86f)))
-        // замеры — до преобразования (снаружи слоя), иначе полёт искажал бы сам себя
         var col by remember { mutableStateOf(Rect.Zero) }
-        var gridAt by remember { mutableStateOf(Offset.Zero) }
         Column(
             Modifier.fillMaxSize().statusBarsPadding().nestedScroll(drag)
                 .onGloballyPositioned { col = it.boundsInRoot() }
-                .graphicsLayer {
-                    val f = open.value
-                    val from = ctl.stackFrom
-                    translationY = pull.value * 0.6f
-                    if (from != null && gridBox.width > 0f) {
-                        // сетка стопки сжата в плитку стопки и растёт из неё: масштаб — от ширины плитки к ширине сетки,
-                        // центр сетки едет из центра плитки на своё место
-                        val k0 = from.width / gridBox.width
-                        val k = (k0 + (1f - k0) * f).coerceAtLeast(0f)
-                        val c = gridBox.center
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
-                            ((c.x - col.left) / size.width).coerceIn(0f, 1f), ((c.y - col.top) / size.height).coerceIn(0f, 1f),
-                        )
-                        scaleX = k; scaleY = k
-                        translationX = (from.center.x - c.x) * (1f - f)
-                        translationY += (from.center.y - c.y) * (1f - f)
-                        // крошечная сетка на месте стопки проявляется сразу, а не тает весь полёт
-                        alpha = (f * 4f).coerceIn(0f, 1f)
-                    } else {
-                        val k = (0.9f + 0.1f * f).coerceAtLeast(0f); scaleX = k; scaleY = k
-                        alpha = f.coerceIn(0f, 1f)
-                    }
-                }
+                .graphicsLayer { translationY = pull.value * 0.6f }
                 // тап мимо кадров (поля, заголовок, пустое место под сеткой) — стопка складывается
                 .pointerInput(Unit) {
                     detectTapGestures { at -> val r = at + col.topLeft; if (slots.values.none { it.contains(r) }) close() }
@@ -267,27 +274,95 @@ fun StackView(s: Still, ctl: FeedController) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 state = grid,
-                modifier = Modifier.fillMaxSize().onPlaced { c ->
-                    // видимая часть сетки — от первого ряда до последнего кадра (не вся высота экрана), в координатах экрана
-                    val pp = c.positionInParent()
-                    val b = Rect(col.left + pp.x, col.top + pp.y, col.left + pp.x + c.size.width, col.top + pp.y + c.size.height)
-                    val rows = (members.size + 2) / 3
-                    val tile = (b.width - with(density) { 24.dp.toPx() + 10.dp.toPx() }) / 3f
-                    val h = (rows * tile + (rows - 1) * with(density) { 5.dp.toPx() } + with(density) { 4.dp.toPx() }).coerceAtMost(b.height)
-                    gridBox = Rect(b.left, b.top, b.right, b.top + h)
-                },
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = bottom + 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                itemsIndexed(members, key = { _, m -> m.id }) { _, m -> StackTile(s, m, slots) }
+                itemsIndexed(members, key = { _, m -> m.id }) { _, m -> StackTile(s, m, slots) { settled } }
             }
         }
+        if (!settled) StackFlight(s, ctl, e, b1, b2, slots, { open.value })
+    }
+}
+
+/**
+ * Кадры в полёте между стопкой в ленте и сеткой: каждый — карточка с той же кромкой, тенью, скруглением и наклоном,
+ * что в стопке, и плавно превращается в плитку сетки. Порядок — как в стопке: верхний сверху, два выглядывающих
+ * под ним, остальные ниже (их не видно, пока они в стопке).
+ */
+@Composable
+private fun StackFlight(
+    s: Still, ctl: FeedController, e: com.eagalts.still.media.Entry, b1: MediaItem?, b2: MediaItem?,
+    slots: HashMap<Long, Rect>, open: () -> Float,
+) {
+    val p = LocalPalette.current
+    val order = e.members.filter { it.id != e.cover.id && it != b1 && it != b2 } + listOfNotNull(b2, b1) + e.cover
+    Box(Modifier.fillMaxSize()) {
+        var drawn = false
+        for (m in order) {
+            val slot = slots[m.id] ?: continue
+            val card = when (m) { e.cover -> Pile.TOP; b1 -> Pile.B1; b2 -> Pile.B2; else -> Pile.TOP }
+            FlyingCard(s, ctl, m, slot, card, open, p)
+            drawn = true
+        }
+        // стопка в ленте уходит ровно в тот кадр, когда её подменили карточки (места в сетке уже измерены)
+        if (drawn) androidx.compose.runtime.SideEffect { ctl.pileTaken = true }
     }
 }
 
 @Composable
-private fun StackTile(s: Still, item: MediaItem, slots: HashMap<Long, Rect>) {
+private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rect, card: Pile.Card, open: () -> Float, p: Palette) {
+    val density = LocalDensity.current
+    val bmp = rememberThumb(s, item, 320)
+    val ph = placeholder(s, item, p)
+    val gridR = with(density) { 14.dp.toPx() }
+    val path = remember { Path() }
+    Spacer(
+        Modifier
+            .offset { androidx.compose.ui.unit.IntOffset(slot.left.toInt(), slot.top.toInt()) }
+            .size(with(density) { slot.width.toDp() }, with(density) { slot.height.toDp() })
+            .graphicsLayer {
+                val f = open().coerceIn(0f, 1.05f)
+                val from = ctl.stackFrom ?: return@graphicsLayer
+                // где эта карточка лежит в стопке на экране: поля, сдвиг, наклон — как в drawPile
+                val side = from.width
+                val c = from.deflate(side * Pile.MARGIN).translate(card.dx * side, card.dy * side)
+                val sc = (c.width / slot.width + (1f - c.width / slot.width) * f).coerceAtLeast(0f)
+                scaleX = sc; scaleY = sc
+                translationX = (c.center.x - slot.center.x) * (1f - f)
+                translationY = (c.center.y - slot.center.y) * (1f - f)
+                rotationZ = card.deg * (1f - f)
+            }
+            .drawBehind {
+                val f = open().coerceIn(0f, 1f)
+                val from = ctl.stackFrom
+                val side = from?.width ?: size.width
+                // всё в долях стороны стопки на экране, переведённое в масштаб этой плитки (слой её сожмёт)
+                val sc = if (from == null) 1f else ((side * (1f - 2 * Pile.MARGIN)) / size.width).let { it + (1f - it) * f }.coerceAtLeast(0.05f)
+                val k = 1f - f
+                val pileR = (side / ctl.pileScale() * Pile.RADIUS).coerceIn(2.dp.toPx(), 10.dp.toPx()) * ctl.pileScale()
+                val r = (pileR + (gridR - pileR) * f) / sc
+                val edge = ((side / ctl.pileScale() * Pile.EDGE).coerceIn(1.dp.toPx(), 2.5.dp.toPx()) * ctl.pileScale() / sc) * k
+                val drop = side * Pile.DROP / sc * k
+                val full = Rect(0f, 0f, size.width, size.height)
+                if (k > 0.001f) {
+                    drawRoundRect(Pile.shadow(p).copy(alpha = Pile.shadow(p).alpha * k), Offset(0f, drop), size, CornerRadius(r))
+                    drawRoundRect(Pile.paper(p), Offset.Zero, size, CornerRadius(r))
+                }
+                val inner = full.deflate(edge)
+                path.reset(); path.addRoundRect(RoundRect(inner, CornerRadius((r - edge).coerceAtLeast(0f))))
+                clipPath(path) {
+                    val b = bmp.value
+                    if (b != null) drawCover(b, inner) else drawRect(ph)
+                    if (card.dim * k > 0.001f) drawRect(Color.Black, alpha = card.dim * k)
+                }
+            }
+    )
+}
+
+@Composable
+private fun StackTile(s: Still, item: MediaItem, slots: HashMap<Long, Rect>, settled: () -> Boolean) {
     val p = LocalPalette.current
     val bmp = rememberThumb(s, item, 320)
     val r = with(LocalDensity.current) { 14.dp.toPx() }
@@ -296,7 +371,8 @@ private fun StackTile(s: Still, item: MediaItem, slots: HashMap<Long, Rect>) {
         Modifier.aspectRatio(1f).testTag("stack-${item.id}")
             .onGloballyPositioned { slots[item.id] = it.boundsInRoot() }
             .graphicsLayer {
-                if (s.viewing != null && flyingIdState.longValue == item.id) alpha = 0f
+                // в полёте кадр нарисован карточкой в слое полёта — здесь его нет
+                if (!settled() || (s.viewing != null && flyingIdState.longValue == item.id)) alpha = 0f
                 this.shape = shape; clip = true
             }
             .bouncy(0.95f) { s.viewInStack(item) }

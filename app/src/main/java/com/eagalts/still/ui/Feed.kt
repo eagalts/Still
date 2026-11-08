@@ -124,6 +124,10 @@ class FeedController(val grid: LazyGridState) {
     var cols = 3
     /** Где на экране была стопка, которую открыли: из неё вылетают кадры и в неё же складываются. */
     var stackFrom: Rect? = null
+    /** Карточки стопки уже на столе (в полёте или в сетке) — стопку в ленте можно убрать, пустого кадра не будет. */
+    var pileTaken by mutableStateOf(false)
+    /** Масштаб линзы у плитки открытой стопки: стопка в ленте нарисована в её размере и уменьшена линзой. */
+    fun pileScale(): Float = if (tilePx > 0) ((stackFrom?.width ?: tilePx.toFloat()) / tilePx).coerceIn(0.3f, 2f) else 1f
     /** Насколько открыта стопка (0…1): лента под ней уходит вглубь и в размытие ровно в такт. */
     var stackVeil by androidx.compose.runtime.mutableFloatStateOf(0f)
     /**
@@ -651,7 +655,8 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
                 // открытая стопка: на её месте растёт сетка её кадров — сама стопка растворяется и проявляется обратно
-                val base = if (hidden) 0f else if (opened) (1f - ctl.stackVeil * 3f).coerceIn(0f, 1f) else 1f
+                // открытая стопка: её кадры сейчас на столе (в сетке или в полёте) — в ленте её нет, пока не сложится
+                val base = if (hidden || (opened && ctl.pileTaken)) 0f else 1f
                 // дымка линзы: к краям кадр уходит в фон. Она — прозрачность слоя, а не заливка внутри плитки:
                 // слой пересчитывается на каждом кадре прокрутки, а нарисованное внутри видеокарта не перерисовывает —
                 // заливка застревала, и кадр, долистанный до центра, оставался мутным. На светлой теме — слабее.
@@ -671,9 +676,9 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         val shown by animateFloatAsState(if (bmp.value != null) 1f else 0f, if (bmp.fresh) tween(140) else tween(0), label = "load")
         val dust = remember(leaving, bmp.value) { if (leaving) bmp.value?.let(::dustOf) else null }
         // под обложкой — два других кадра стопки, маленькими миниатюрами (их почти не видно, крупнее не нужно)
-        val backs = if (stacked) c.entry.members.filter { it.id != item.id }.let { o -> listOf(o.getOrNull(o.size / 2), o.lastOrNull()) } else emptyList()
-        val back1 = backs.getOrNull(0)?.let { rememberThumb(s, it, 160) }
-        val back2 = backs.getOrNull(1)?.takeIf { it != backs[0] }?.let { rememberThumb(s, it, 160) }
+        val backs = if (stacked) Pile.backs(c.entry) else null to null
+        val back1 = backs.first?.let { rememberThumb(s, it, 160) }
+        val back2 = backs.second?.let { rememberThumb(s, it, 160) }
         if (stacked && !leaving) Spacer(
             Modifier.fillMaxSize().drawBehind {
                 drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, 0f)

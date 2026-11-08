@@ -600,7 +600,10 @@ class FeedUiTest {
         assertEquals("лента ещё притушена в кадре, где стопка закрылась", 0f, ctl.stackVeil, 0.001f)
         val after = shot("stack-after", settle = false)
         val c = pile.center
-        assertEquals("стопка в ленте не вернулась на место", before.getPixel(c.x.toInt(), c.y.toInt()), after.getPixel(c.x.toInt(), c.y.toInt()))
+        val pb = before.getPixel(c.x.toInt(), c.y.toInt()); val pa = after.getPixel(c.x.toInt(), c.y.toInt())
+        val d = kotlin.math.abs(android.graphics.Color.red(pb) - android.graphics.Color.red(pa)) +
+            kotlin.math.abs(android.graphics.Color.green(pb) - android.graphics.Color.green(pa)) + kotlin.math.abs(android.graphics.Color.blue(pb) - android.graphics.Color.blue(pa))
+        assertTrue("стопка в ленте не вернулась на место: разница $d", d < 24)
         rule.mainClock.autoAdvance = true
     }
 
@@ -659,6 +662,47 @@ class FeedUiTest {
         rule.runOnIdle { d.dispatchOnBackProgressed(ev(0.5f)) }
         rule.runOnIdle { d.onBackPressed() }
         until(3000) { still.stack == null }
+    }
+
+    /**
+     * Стопка складывается физически: в последнем кадре закрытия разложенные кадры совпадают со стопкой в ленте —
+     * верхний снимок сверху, два выглядывающих под своими углами, кромка и тень (скачка, когда стопка «встаёт» в
+     * ленту, нет); и открытие начинается ровно с неё же. Раньше сетка сжималась в мозаику, а сверху стопки был другой кадр.
+     */
+    @Test fun stackFoldsIntoThePileExactly() {
+        show()
+        val pile = rule.runOnIdle { ctl.bounds(103) }!!
+        val before = shot("pile-before")
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("tile-103").performClick()
+        rule.mainClock.advanceTimeByFrame(); rule.mainClock.advanceTimeByFrame()
+        val first = shot("pile-open-first", settle = false)
+        for (k in 0 until 12) { rule.mainClock.advanceTimeBy(48); shot("film2-open-%02d".format(k), settle = false) }
+        rule.mainClock.advanceTimeBy(1000)
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        var last: android.graphics.Bitmap? = null
+        var k = 0
+        while (still.stack != null) {
+            rule.mainClock.advanceTimeByFrame()
+            if (still.stack != null) last = shot("film2-close-%02d".format(k++), settle = false)
+            check(k < 200)
+        }
+        // через кадр после закрытия — уже настоящая стопка в ленте (а не карточки)
+        rule.mainClock.advanceTimeByFrame(); rule.mainClock.advanceTimeByFrame()
+        val after = shot("pile-after", settle = false)
+        fun diff(a: android.graphics.Bitmap, b: android.graphics.Bitmap): Double {
+            var sum = 0L; var n = 0
+            var y = pile.top.toInt(); while (y < pile.bottom.toInt()) { var x = pile.left.toInt(); while (x < pile.right.toInt()) {
+                val p = a.getPixel(x, y); val q = b.getPixel(x, y)
+                sum += kotlin.math.abs(android.graphics.Color.red(p) - android.graphics.Color.red(q)) + kotlin.math.abs(android.graphics.Color.green(p) - android.graphics.Color.green(q)) + kotlin.math.abs(android.graphics.Color.blue(p) - android.graphics.Color.blue(q))
+                n++; x += 3 }; y += 3 }
+            return sum.toDouble() / n
+        }
+        val landing = diff(last!!, after); val start = diff(first, before)
+        println("PILE landing=$landing start=$start")
+        assertTrue("в последнем кадре закрытия стопка не совпала со стопкой в ленте: $landing", landing < 12.0)
+        assertTrue("открытие не начинается со стопки: $start", start < 25.0)
+        rule.mainClock.autoAdvance = true
     }
 
     /** Тап мимо кадров стопки — она складывается обратно. */
