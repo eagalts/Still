@@ -606,9 +606,13 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 translationY = pose[Lens.TY]
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
-                // открытая стопка остаётся лежать — из неё вынут только верхний снимок (см. drawPile)
                 // открытая стопка: на её месте растёт сетка её кадров — сама стопка растворяется и проявляется обратно
-                alpha = if (hidden) 0f else if (opened) (1f - ctl.stackVeil * 3f).coerceIn(0f, 1f) else 1f
+                val base = if (hidden) 0f else if (opened) (1f - ctl.stackVeil * 3f).coerceIn(0f, 1f) else 1f
+                // дымка линзы: к краям кадр уходит в фон. Она — прозрачность слоя, а не заливка внутри плитки:
+                // слой пересчитывается на каждом кадре прокрутки, а нарисованное внутри видеокарта не перерисовывает —
+                // заливка застревала, и кадр, долистанный до центра, оставался мутным. На светлой теме — слабее.
+                val haze = if (leaving) 0f else pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
+                alpha = base * (1f - haze).coerceIn(0f, 1f)
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
                 // (масштаб слоя уменьшает и радиус — делим на него, чтобы на экране он был ровно таким)
@@ -628,8 +632,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         val back2 = backs.getOrNull(1)?.takeIf { it != backs[0] }?.let { rememberThumb(s, it, 160) }
         if (stacked && !leaving) Spacer(
             Modifier.fillMaxSize().drawBehind {
-                val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
-                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, sh)
+                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, 0f)
             }
         ) else Spacer(
             Modifier.fillMaxSize().drawBehind {
@@ -642,13 +645,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 }
                 // миниатюры ещё нет — плитка залита основным цветом этого кадра (посчитан для поиска и стопок)
                 if (shown < 1f) drawRect(placeholder(s, item, p))
-                if (b != null && shown > 0f) {
-                    drawCover(b, area, shown)
-                    // к краям линзы кадр уходит в тень (цвет фона): взгляд держится в центре;
-                    // на светлой теме тень — белая дымка: делаем её слабее, иначе края выглядят выцветшими
-                    val sh = pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
-                    if (sh > 0.01f) drawRect(p.page, alpha = sh)
-                }
+                if (b != null && shown > 0f) drawCover(b, area, shown)
             }
         )
         if (item.video && cols <= 5) VideoBadge(item.durationMs)

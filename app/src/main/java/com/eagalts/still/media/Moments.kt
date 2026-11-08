@@ -10,7 +10,9 @@ package com.eagalts.still.media
  *    (браузер в 18:26 и он же с 19:35). Стена — только пауза больше [HARD_MS].
  * 2. Сцены — по смыслу кадра (вектор модели, [Embedder]): средняя связь, склеиваем, пока среднее
  *    расстояние между группами не больше [TAU]. Расстояние — непохожесть (1 − косинус) плюс немного за разницу
- *    во времени ([ALPHA] за [T_MS] и больше) и за границу выхода ([BETA]).
+ *    во времени ([ALPHA] за [T_MS] и больше) и за границу выхода ([BETA]), минус бонус близости ([GAMMA]):
+ *    кадры, снятые с разницей в минуты, — одно дело (посудомойка, угол стены и трубы за четверть часа — одна
+ *    стопка, хотя модель видит на них разное); чем дальше по времени, тем меньше бонус.
  * Чужой кадр посреди сцены её не рвёт: сцена собирается по сходству, а не по соседству.
  * Одиночный кадр остаётся обычным фото. Пороги подобраны на открытом архиве событий и проверены на реальных лентах.
  */
@@ -23,6 +25,9 @@ object Moments {
     const val TAU = 0.85f
     const val ALPHA = 0.1f
     const val BETA = 0.1f
+    /** Бонус близости: кадры, снятые с разницей в минуты, ближе на GAMMA·exp(−Δt/NEAR) — одно дело. */
+    const val GAMMA = 0.25f
+    const val NEAR_MS = 15 * 60_000L
     const val T_MS = 3 * 60 * 60_000L
     /** Выход длиннее — режется по самым большим паузам: матрица расстояний растёт как квадрат. */
     const val MAX_OUTING = 600
@@ -58,7 +63,7 @@ object Moments {
      */
     fun scenes(
         vecs: List<ByteArray>, times: LongArray, outing: IntArray? = null,
-        tau: Float = TAU, alpha: Float = ALPHA, beta: Float = BETA,
+        tau: Float = TAU, alpha: Float = ALPHA, beta: Float = BETA, gamma: Float = GAMMA,
     ): IntArray {
         val n = vecs.size
         if (n < 2) return IntArray(n)
@@ -70,7 +75,8 @@ object Moments {
             for (k in a.indices) dot += a[k] * b[k]
             val cos = dot / (norm[i] * norm[j])
             val dt = Math.abs(times[i] - times[j]).toFloat() / T_MS
-            val v = (1f - cos) + alpha * minOf(1f, dt) + if (outing != null && outing[i] != outing[j]) beta else 0f
+            val near = gamma * Math.exp(-Math.abs(times[i] - times[j]).toDouble() / NEAR_MS).toFloat()
+            val v = (1f - cos) + alpha * minOf(1f, dt) + (if (outing != null && outing[i] != outing[j]) beta else 0f) - near
             d[i * n + j] = v; d[j * n + i] = v
         }
         val size = IntArray(n) { 1 }

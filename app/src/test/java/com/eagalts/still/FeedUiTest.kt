@@ -272,6 +272,36 @@ class FeedUiTest {
         rule.mainClock.autoAdvance = true
     }
 
+    /**
+     * Дымка линзы едет вместе с кадром: кадр у края притенён, долистал его до центра — он чистый, как сам снимок.
+     * Раньше дымка была нарисована внутри плитки и не перерисовывалась при прокрутке — кадр оставался мутным и в центре.
+     */
+    @Test fun lensHazeLeavesTileScrolledToCenter() {
+        show()
+        val infos = ctl.grid.layoutInfo.visibleItemsInfo
+        val far = infos.groupBy { it.row }.filter { it.value.size == 3 }.toSortedMap().values.first()[1]
+        val id = far.key as Long
+        val vp = ctl.grid.layoutInfo
+        val farY = far.offset.y - vp.viewportStartOffset + far.size.height / 2f
+        shot("haze-before")
+        rule.mainClock.autoAdvance = false
+        // ведём кадр от края к центру, как пальцем: несколько кадров прокрутки
+        val total = vp.viewportSize.height / 2f - farY
+        repeat(6) { rule.runOnIdle { ctl.grid.dispatchRawDelta(-total / 6f) }; rule.mainClock.advanceTimeByFrame() }
+        rule.mainClock.advanceTimeBy(64); rule.waitForIdle()
+        val b = shot("haze-after", settle = false)
+        val r = checkNotNull(rule.runOnIdle { ctl.bounds(id) }) { "кадр ушёл с экрана" }
+        val item = still.all.first { it.id == id }
+        val thumb = still.lib.thumbnail(item, 256, android.os.CancellationSignal())!!
+        val want = thumb.getPixel(thumb.width / 2, thumb.height / 2)
+        val got = b.getPixel(r.center.x.toInt(), r.center.y.toInt())
+        val diff = kotlin.math.abs(android.graphics.Color.red(want) - android.graphics.Color.red(got)) +
+            kotlin.math.abs(android.graphics.Color.green(want) - android.graphics.Color.green(got)) +
+            kotlin.math.abs(android.graphics.Color.blue(want) - android.graphics.Color.blue(got))
+        assertTrue("кадр в центре остался в дымке: разница с самим снимком $diff", diff < 45)
+        rule.mainClock.autoAdvance = true
+    }
+
     /** Магниты: как ни листай, после остановки ближайший ряд встаёт ровно в центр экрана. */
     @Test fun rowsSnapToTheCenter() {
         show()

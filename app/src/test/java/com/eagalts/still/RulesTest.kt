@@ -166,6 +166,22 @@ class RulesTest {
         assertEquals(listOf(18, 3), e2.map { it.members.size })
     }
 
+    /**
+     * Одно дело за четверть часа — одна стопка, даже если на кадрах разное: посудомойка в 22:35, угол стены и трубы
+     * в 22:47–22:50. Модель видит три разные сцены, но снято подряд — значит, одно. Раньше было три группы.
+     */
+    @Test fun shortTaskIsOneStackEvenIfContentDiffers() {
+        // одна кухня, один свет: у сцен есть общая часть — между ними расстояние 0.92–0.96, как у настоящих кадров
+        val room = scene()
+        fun part() = scene().let { v -> FloatArray(v.size) { v[it] + 0.38f * room[it] } }
+        val dishwasher = part(); val corner = part(); val pipes = part()
+        val asc = timeline(now, listOf(0, 12, 1, 1, 2))
+        val vec = mapOf(1L to shot(dishwasher), 2L to shot(corner), 3L to shot(pipes), 4L to shot(corner), 5L to shot(pipes))
+        val e = build(asc, vec)
+        assertEquals(1, e.size)
+        assertEquals(5, e[0].members.size)
+    }
+
     /** Одинаковое утром и вечером — разные выходы: стопки не склеиваются через полдня. */
     @Test fun sameContentInDifferentOutingsIsTwoStacks() {
         val desk = scene()
