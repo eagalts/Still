@@ -645,7 +645,6 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 translationY = pose[Lens.TY]
                 val k = pose[Lens.SCALE] * lerp(1f, 0.88f, pick)
                 scaleX = k.coerceAtLeast(0f); scaleY = k.coerceAtLeast(0f)
-                // открытая стопка: на её месте растёт сетка её кадров — сама стопка растворяется и проявляется обратно
                 // открытая стопка: её кадры сейчас на столе (в сетке или в полёте) — в ленте её нет, пока не сложится
                 val base = if (hidden || (opened && ctl.pileTaken)) 0f else 1f
                 // дымка линзы: к краям кадр уходит в фон. Она — прозрачность слоя, а не заливка внутри плитки:
@@ -653,11 +652,14 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 // заливка застревала, и кадр, долистанный до центра, оставался мутным. На светлой теме — слабее.
                 val haze = if (leaving) 0f else pose[Lens.SHADE] * (if (p.dark) 1f else 0.55f)
                 alpha = base * (1f - haze).coerceIn(0f, 1f)
-                // «Поток» под лентой: внизу экрана — бледный и размытый, к середине — проявляется до чёткого
-                if (c.flow) {
-                    val k = flowClarity(spot.y + spot.h / 2f, vp.height.toFloat())
-                    alpha *= 0.22f + 0.78f * k
-                    renderEffect = ctl.flowBlur((1f - k) * 14.dp.toPx())
+                // появление у краёв: кадр, въезжающий сверху или снизу, сначала бледный и размытый и проявляется,
+                // пройдя пятую часть экрана; «Поток» под лентой — сильнее: проявляется только к середине
+                val cy = spot.y + spot.h / 2f; val vh = vp.height.toFloat()
+                val edge = edgeClarity(cy, vh)
+                val clear = if (c.flow) minOf(edge, flowClarity(cy, vh)) else edge
+                if (clear < 0.999f && !leaving) {
+                    alpha *= if (c.flow) 0.22f + 0.78f * clear else 0.3f + 0.7f * clear
+                    renderEffect = ctl.flowBlur((1f - clear) * (if (c.flow) 14.dp.toPx() else 10.dp.toPx()))
                 } else renderEffect = null
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
@@ -1052,6 +1054,13 @@ internal fun placeholder(s: Still, item: MediaItem, p: Palette): Color {
  */
 internal fun idsOf(c: Cell.Tile): List<Long> = if (c.entry.stacked) c.entry.members.map { it.id } else listOf(c.item.id)
 
+
+/** Чёткость кадра у краёв экрана: у самого края — 0, пройдя пятую часть высоты (сверху или снизу) — 1. */
+fun edgeClarity(centerY: Float, viewport: Float): Float {
+    if (viewport <= 0f) return 1f
+    val d = minOf(centerY, viewport - centerY)
+    return (d / (viewport * 0.2f)).coerceIn(0f, 1f)
+}
 
 /**
  * Чёткость кадра «Потока» по его месту на экране: ниже 90% высоты — 0 (бледный, размытый), с середины и выше — 1.

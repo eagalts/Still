@@ -830,6 +830,33 @@ class FeedUiTest {
         shot("veil-revealed")
     }
 
+    /**
+     * Сверху кадры появляются так же, как «Поток» снизу: у верхнего края — бледные и размытые, долистал до середины —
+     * чёткие. Раньше сверху кадр просто выезжал из-под края, резко обрезанный.
+     */
+    @Test fun tilesFadeInAtTopEdge() {
+        show()
+        fun diff(id: Long): Int {
+            val b = shot("edge-$id", settle = false)
+            val r = rule.runOnIdle { ctl.bounds(id) }!!
+            val t = still.lib.thumbnail(still.all.first { it.id == id }, 256, android.os.CancellationSignal())!!
+            val want = t.getPixel(t.width / 2, t.height / 2); val got = b.getPixel(r.center.x.toInt(), r.center.y.toInt())
+            return kotlin.math.abs(android.graphics.Color.red(want) - android.graphics.Color.red(got)) +
+                kotlin.math.abs(android.graphics.Color.green(want) - android.graphics.Color.green(got)) + kotlin.math.abs(android.graphics.Color.blue(want) - android.graphics.Color.blue(got))
+        }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        // самый верхний видимый кадр ленты — у края
+        val top = rule.runOnIdle {
+            ctl.grid.layoutInfo.visibleItemsInfo.filter { it.index <= still.feed.feedEnd && it.key is Long }.minBy { it.offset.y }.key as Long
+        }
+        val atEdge = diff(top)
+        assertTrue("у верхнего края кадр не бледный: $atEdge", atEdge > 60)
+        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == top }, 0) }
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        val centered = diff(top)
+        assertTrue("в середине кадр не проявился: $centered", centered in 0..40)
+    }
+
     @Test fun tapOpensViewerAndBackFliesHome() {
         show()
         rule.onNodeWithTag("tile-300").performClick()
