@@ -705,6 +705,20 @@ class FeedUiTest {
         rule.mainClock.autoAdvance = true
     }
 
+    /**
+     * При открытии кадры видно в полёте: через несколько кадров после тапа карточка верхнего снимка уже есть и
+     * летит от стопки к своему месту. Раньше на телефоне полёта не было вовсе — экран размывался, стопка лежала,
+     * а потом сетка появлялась сразу (слой полёта не узнавал, что места кадров уже измерены).
+     */
+    @Test fun openingShowsCardsInFlight() {
+        show()
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("tile-103").performClick()
+        repeat(4) { rule.mainClock.advanceTimeByFrame() }
+        rule.onNodeWithTag("flying-103").assertExists()
+        rule.mainClock.autoAdvance = true
+    }
+
     /** Тап мимо кадров стопки — она складывается обратно. */
     @Test fun tapOutsideClosesStack() {
         show()

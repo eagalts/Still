@@ -164,7 +164,9 @@ fun StackView(s: Still, ctl: FeedController) {
     val open = remember(e.key) { Animatable(0f) }
     val pull = remember { Animatable(0f) }
     var closing by remember(e.key) { mutableStateOf(false) }
-    val slots = remember { HashMap<Long, Rect>() }
+    // места кадров в сетке — наблюдаемые: слой полёта перерисуется, как только они измерены (обычная таблица
+    // этого не сообщала, и при открытии карточки не появлялись вовсе — только размытие, а потом сразу сетка)
+    val slots = remember { androidx.compose.runtime.mutableStateMapOf<Long, Rect>() }
     val grid = rememberLazyGridState()
     val (b1, b2) = remember(e) { Pile.backs(e) }
     // во время полёта сетка спрятана — кадры летят отдельным слоем поверх всего (сетка обрезала бы их по краю)
@@ -294,7 +296,7 @@ fun StackView(s: Still, ctl: FeedController) {
 @Composable
 private fun StackFlight(
     s: Still, ctl: FeedController, e: com.eagalts.still.media.Entry, b1: MediaItem?, b2: MediaItem?,
-    slots: HashMap<Long, Rect>, open: () -> Float,
+    slots: MutableMap<Long, Rect>, open: () -> Float,
 ) {
     val p = LocalPalette.current
     val order = e.members.filter { it.id != e.cover.id && it != b1 && it != b2 } + listOfNotNull(b2, b1) + e.cover
@@ -319,7 +321,7 @@ private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rec
     val gridR = with(density) { 14.dp.toPx() }
     val path = remember { Path() }
     Spacer(
-        Modifier
+        Modifier.testTag("flying-${item.id}")
             .offset { androidx.compose.ui.unit.IntOffset(slot.left.toInt(), slot.top.toInt()) }
             .size(with(density) { slot.width.toDp() }, with(density) { slot.height.toDp() })
             .graphicsLayer {
@@ -362,14 +364,14 @@ private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rec
 }
 
 @Composable
-private fun StackTile(s: Still, item: MediaItem, slots: HashMap<Long, Rect>, settled: () -> Boolean) {
+private fun StackTile(s: Still, item: MediaItem, slots: MutableMap<Long, Rect>, settled: () -> Boolean) {
     val p = LocalPalette.current
     val bmp = rememberThumb(s, item, 320)
     val r = with(LocalDensity.current) { 14.dp.toPx() }
     val shape = remember(r) { RoundedCornerShape(r) }
     Box(
         Modifier.aspectRatio(1f).testTag("stack-${item.id}")
-            .onGloballyPositioned { slots[item.id] = it.boundsInRoot() }
+            .onGloballyPositioned { val r = it.boundsInRoot(); if (slots[item.id] != r) slots[item.id] = r }
             .graphicsLayer {
                 // в полёте кадр нарисован карточкой в слое полёта — здесь его нет
                 if (!settled() || (s.viewing != null && flyingIdState.longValue == item.id)) alpha = 0f
