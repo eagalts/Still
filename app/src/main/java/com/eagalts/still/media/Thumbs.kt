@@ -36,8 +36,18 @@ class Thumbs(ctx: Context?, private val lib: Library, private val index: Index, 
     /** Уже есть в памяти (этой ступени или крупнее) — без ожидания, чтобы плитка не мигала пустой. */
     fun peek(id: Long, px: Int): Bitmap? {
         for (s in step(px)..3) cache.get(key(id, s))?.let { return it }
+        synchronized(held) { held[id] }?.let { return it }
         return null
     }
+
+    /**
+     * Придержать миниатюры, которые сейчас на экране и сейчас же понадобятся другой плитке (выглядывающий «Поток»
+     * подменяется настоящим): общий кэш мог их вытеснить, и на месте снимка мелькнула бы заглушка. Не больше 24.
+     */
+    private val held = object : LinkedHashMap<Long, Bitmap>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Bitmap>?) = size > 24
+    }
+    fun hold(id: Long, b: Bitmap) = synchronized(held) { held[id] = b }
 
     suspend fun load(item: MediaItem, px: Int): Bitmap? {
         peek(item.id, px)?.let { return it }

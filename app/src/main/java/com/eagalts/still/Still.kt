@@ -52,8 +52,11 @@ sealed class Cell {
     }
 }
 
-/** [feedEnd] — последняя ячейка ленты: лента открывается на ней (на самом свежем). */
-class Feed(val cells: List<Cell>, val cols: Int, val gen: Int) {
+/**
+ * [feedEnd] — последняя ячейка ленты: лента открывается на ней (на самом свежем). [filter] — для чего собраны ячейки:
+ * фильтр меняется сразу, а ячейки досчитываются следом — раскладка (линза, поля) идёт по ячейкам, а не по фильтру.
+ */
+class Feed(val cells: List<Cell>, val cols: Int, val gen: Int, val filter: Filter? = null) {
     val feedEnd: Int = cells.size - 1
 }
 
@@ -232,7 +235,7 @@ class Still(
         rebuildJob?.cancel()
         rebuildJob = scope.launch {
             val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, t, ttl) }
-            feed = Feed(built, cols, feed.gen + 1)
+            feed = Feed(built, cols, feed.gen + 1, f)
             if (f == null) flowPeek = flowLatest
             refreshStack(built)
         }
@@ -250,7 +253,8 @@ class Still(
         paper = pp
         val base = when (f) {
             null -> items.filter { Ephemeral.inFeed(it, t, kept, ttl, pp) }
-            Filter.Flow -> items.filter { Ephemeral.temporary(it, pp) }
+            // «Поток» — то, что из ленты уже ушло (то же, что выглядывает под ней)
+            Filter.Flow -> items.filter { Ephemeral.temporary(it, pp) && !Ephemeral.inFeed(it, t, kept, ttl, pp) }
             Filter.Videos -> items.filter { it.video }
             Filter.Screens -> items.filter { it.source == Source.SCREENSHOT }
             Filter.Favorites -> items.filter { it.favorite }
@@ -325,7 +329,7 @@ class Still(
         val old = columns
         columns = c
         // раскладка — сразу, в этом же кадре; если сменился уровень подписей (месяцы, годы) — они досчитываются следом
-        feed = Feed(feed.cells, c, feed.gen + 1)
+        feed = Feed(feed.cells, c, feed.gen + 1, feed.filter)
         if (levelOf(old) != levelOf(c) || levelOf(c) != Level.NONE) rebuild()
     }
 
@@ -367,8 +371,13 @@ class Still(
         .map { (id, v) -> Filter.Album(id, v.first().bucket.ifEmpty { "—" }) to v.first() }
         .sortedByDescending { it.second.taken }
 
-    fun counts() = mapOf(
-        Filter.Flow to all.count { Ephemeral.temporary(it, paper) },
+    fun counts(): Map<Filter, Int> {
+        val k = index.keptIds(); val t = now()
+        return countsWith(k, t)
+    }
+
+    private fun countsWith(k: Set<Long>, t: Long) = mapOf(
+        Filter.Flow to all.count { Ephemeral.temporary(it, paper) && !Ephemeral.inFeed(it, t, k, flowTtl, paper) },
         Filter.Videos to all.count { it.video },
         Filter.Screens to all.count { it.source == Source.SCREENSHOT },
         Filter.Favorites to all.count { it.favorite },

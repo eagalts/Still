@@ -430,7 +430,7 @@ class FeedUiTest {
         rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
         val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
         val c = box.center
-        val before = rule.runOnIdle { ctl.hit(c)?.key }
+        val before = rule.runOnIdle { ctl.hit(c)?.let { ctl.cells[it].key } }
         rule.onNodeWithTag("feed").performTouchInput {
             pinch(
                 androidx.compose.ui.geometry.Offset(c.x - width * 0.4f, c.y), androidx.compose.ui.geometry.Offset(c.x - width * 0.12f, c.y),
@@ -618,6 +618,25 @@ class FeedUiTest {
      * Срок до «Потока» — ползунком в самом «Потоке»: по умолчанию 3 дня (скриншот двухдневной давности в ленте),
      * потянул к часу — он уходит из ленты; к трём месяцам — возвращаются и месячные.
      */
+    /**
+     * В «Потоке» над кадрами стоит заголовок: нажатие на кадр открывает именно его (а не соседний — номер строки
+     * сетки сдвинут заголовком), нажатие на заголовок не открывает никакого фото.
+     */
+    @Test fun flowTapOpensTheTappedPhoto() {
+        show()
+        rule.runOnIdle { still.open(Filter.Flow) }
+        until { still.feed.filter == Filter.Flow && still.feed.cells.isNotEmpty() && ctl.placed }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithTag("flow-head").performClick()
+        rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
+        assertTrue("нажатие на заголовок открыло фото", still.viewing == null)
+        val first = still.feed.cells.first() as com.eagalts.still.Cell.Tile
+        val r = rule.runOnIdle { ctl.feedBounds(first.item.id)!! }
+        rule.onNodeWithTag("feed").performTouchInput { click(androidx.compose.ui.geometry.Offset(r.center.x - ctl.origin.x, r.center.y - ctl.origin.y)) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        assertEquals(first.item.id, still.viewing?.let { it.items[it.start].id })
+    }
+
     @Test fun flowSliderChangesWhatLeaves() {
         show()
         fun inFeed(id: Long) = id in feedIds()
@@ -625,6 +644,9 @@ class FeedUiTest {
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
         rule.runOnIdle { ctl.grid.requestScrollToItem(0) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        // ползунок раскрывается по «уходят через…» в заголовке «Потока»
+        rule.onNodeWithTag("flow-ttl-open").performClick()
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithText("3 дня").assertExists()
         shot("flow-timer")
@@ -637,6 +659,8 @@ class FeedUiTest {
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
         rule.runOnIdle { ctl.grid.requestScrollToItem(0) }
+        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
+        rule.onNodeWithTag("flow-ttl-open").performClick()
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithTag("flow-slider").performTouchInput { swipeRight(startX = left + 10f, endX = right) }
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
@@ -861,6 +885,44 @@ class FeedUiTest {
         rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
         val centered = diff(top)
         assertTrue("в середине кадр не проявился: $centered", centered in 0..40)
+    }
+
+    /**
+     * Без шва: вытянутый «Поток» доезжает до места своего заголовка и подменяется настоящим «Потоком» — кадр до
+     * подмены и кадр после совпадают (заголовок и первые ряды); раньше на месте куска резко появлялся другой экран
+     * с другими кадрами. «Назад» — «Поток» опускается обратно под ленту.
+     */
+    @Test fun pulledFlowBecomesFlowWithoutSeam() {
+        show()
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.8f))
+            repeat(30) { moveBy(androidx.compose.ui.geometry.Offset(0f, -25f)) }
+            up()
+        }
+        var before: Bitmap? = null; var after: Bitmap? = null; var k = 0
+        while (k < 240) {
+            rule.mainClock.advanceTimeByFrame(); k++
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            val ready = still.feed.filter == Filter.Flow && ctl.shownFilter == Filter.Flow && ctl.placed
+            val b = shot("seam-%03d".format(k), settle = false)
+            if (ready) { after = b; break } else before = b
+        }
+        assertTrue("«Поток» не открылся", after != null && before != null)
+        // сравниваем заголовок и два первых ряда
+        val top = (box.height * 0.02f).toInt(); val bottom = (box.height * 0.55f).toInt()
+        var sum = 0L; var n = 0
+        var y = top; while (y < bottom) { var x = 0; while (x < before!!.width) {
+            val p = before.getPixel(x, y); val q = after!!.getPixel(x, y)
+            sum += kotlin.math.abs(android.graphics.Color.red(p) - android.graphics.Color.red(q)) + kotlin.math.abs(android.graphics.Color.green(p) - android.graphics.Color.green(q)) + kotlin.math.abs(android.graphics.Color.blue(p) - android.graphics.Color.blue(q))
+            n++; x += 4 }; y += 4 }
+        val d = sum.toDouble() / n
+        println("SEAM $d frames=$k")
+        assertTrue("на подмене «Потока» шов: $d", d < 12.0)
+        rule.mainClock.autoAdvance = true
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        until(3000) { still.filter == null && ctl.flowPull.floatValue == 0f }
     }
 
     @Test fun tapOpensViewerAndBackFliesHome() {

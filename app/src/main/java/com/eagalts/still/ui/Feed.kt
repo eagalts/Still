@@ -126,8 +126,8 @@ class FeedController(val grid: LazyGridState) {
     var stackFrom: Rect? = null
     /** Карточки стопки уже на столе (в полёте или в сетке) — стопку в ленте можно убрать, пустого кадра не будет. */
     var pileTaken by mutableStateOf(false)
-    /** На сколько сдвинуть начало, чтобы первая строка встала под капсулу, а не в полэкрана (поле линзы). */
-    var topShift = 0
+    /** Плоская сетка без линзы и без проявления у краёв («Поток»). */
+    var flat = false
     /** Слабый телефон: «Поток» под лентой только бледнеет, без размытия. */
     var weak = false
     private val blurs = HashMap<Int, androidx.compose.ui.graphics.RenderEffect>()
@@ -148,8 +148,19 @@ class FeedController(val grid: LazyGridState) {
     var overlayBounds: ((Long) -> Rect?)? = null
     var overlayReveal: ((Long) -> Unit)? = null
     /** Лента уже встала на место (в конец) и для какого фильтра; стоит ли она в самом конце сейчас. */
-    var placed = false
-    var shownFilter: Filter? = null
+    var placed by mutableStateOf(false)
+    /** Для какого фильтра лента уже встала на место — до этого её не видно (не мелькает не тем местом). */
+    var shownFilter: Filter? by mutableStateOf(null)
+    // ——— «Поток», который вытягивают ———
+    /** Насколько вытянут «Поток» (px): лента уходит вверх на столько же, выглядывающий кусок — навстречу. */
+    val flowPull = androidx.compose.runtime.mutableFloatStateOf(0f)
+    /** Низ ленты, от которого выглядывает «Поток», — замер на время перехода (лента под ним уже меняется). */
+    var peekBase: Float? = null
+    /** С какого места вытянули «Поток» в прошлый раз — туда же он и опускается при закрытии. */
+    var lastBase: Float? = null
+    var lastPull = 0f
+    /** Закрыть «Поток» — тем же движением назад (если его вытягивали). */
+    var closeFlow: () -> Unit = {}
     var atEnd = true
     /** Размер плитки в пикселях — считается один раз на раскладку, а не в каждой плитке. */
     var tilePx = 0
@@ -200,6 +211,9 @@ class FeedController(val grid: LazyGridState) {
         phase += dy
     }
 
+    /** Сколько строк сетки стоит перед кадрами (в «Потоке» — заголовок и ползунок): номер ячейки = номер строки − lead. */
+    var lead = 0
+
     private fun info(id: Long): LazyGridItemInfo? = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
 
     fun bounds(id: Long): Rect? {
@@ -219,8 +233,7 @@ class FeedController(val grid: LazyGridState) {
     /** Докрутить, чтобы плитка оказалась на экране (если её не видно), — перед возвращением фото. */
     fun reveal(id: Long) {
         overlayReveal?.let { it(id); return }
-        val idx = cells.indexOfFirst { it.key == id }
-        if (idx < 0) return
+        val idx = cells.indexOfFirst { it.key == id }.let { if (it < 0) return else it + lead }
         val vis = grid.layoutInfo.visibleItemsInfo
         val i = vis.firstOrNull { it.index == idx }
         val vp = grid.layoutInfo.viewportSize.height
@@ -234,12 +247,16 @@ class FeedController(val grid: LazyGridState) {
         grid.dispatchRawDelta(-(vp * 0.4f))
     }
 
-    /** Ячейка под точкой (координаты сетки). */
-    fun hit(p: Offset): LazyGridItemInfo? {
+    /** Номер кадра в [cells] под точкой (координаты сетки); на заголовке «Потока», ползунке, подсказке — null. */
+    fun hit(p: Offset): Int? {
         val lo = grid.layoutInfo
         // по тому, что видно: под линзой кадр меньше своей ячейки и сдвинут к центру
-        return lo.visibleItemsInfo.firstOrNull { visual(it).contains(p) }
-            ?: lo.visibleItemsInfo.minByOrNull { (visual(it).center - p).getDistanceSquared() }
+        val on = lo.visibleItemsInfo.firstOrNull { visual(it).contains(p) }
+        val info = when {
+            on != null -> on
+            else -> lo.visibleItemsInfo.filter { it.index - lead in cells.indices }.minByOrNull { (visual(it).center - p).getDistanceSquared() }
+        } ?: return null
+        return (info.index - lead).takeIf { it in cells.indices }
     }
 }
 
@@ -294,11 +311,12 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     }
     // кадр под пальцами и где на нём пальцы (доли ширины и высоты) — его держим на месте при смене раскладки
     var anchor by remember { mutableStateOf<Triple<Long, Float, Float>?>(null) }
+    var timerOpen by remember { mutableStateOf(false) }
     // ступень сменилась не щипком — виртуальные столбцы встают на неё же (масштаб 1)
     LaunchedEffect(feed.cols) { if (!ctl.pinching && !vcols.isRunning) vcols.snapTo(feed.cols.toFloat()) }
     // линза уступает, когда делаешь: выбор и отдаление выпрямляют её в обычную сетку
     ctl.fastUnit = with(density) { 48.dp.toPx() }
-    val lensTarget = if (s.selection.isNotEmpty()) 0f else Lens.strengthFor(feed.cols)
+    val lensTarget = if (s.selection.isNotEmpty() || feed.filter == Filter.Flow) 0f else Lens.strengthFor(feed.cols)
     LaunchedEffect(lensTarget) {
         if (ctl.pinching) return@LaunchedEffect   // во время щипка линзу ведут пальцы
         androidx.compose.animation.core.animate(ctl.lens, lensTarget, animationSpec = spring(1f, 260f)) { v, _ -> ctl.lens = v }
@@ -329,9 +347,29 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     }
     LaunchedEffect(feed.gen) { ctl.ambient = ambientOf(s, ctl) }
     // «Поток» вытягивают: лента кончилась, а палец тянет дальше — он выезжает снизу (px, с сопротивлением вдвое)
-    val flowPull = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val flowPull = ctl.flowPull
     val flowClick = remember { PullClick() }
     val flowAt = with(density) { FlowPullAt.dp.toPx() }
+    val isFlow = feed.filter == Filter.Flow
+    // вышел из «Потока» — ползунок срока снова свёрнут (в следующий раз «уходят через…» его раскроет)
+    if (!isFlow && timerOpen) timerOpen = false
+    ctl.lead = if (!isFlow) 0 else if (timerOpen) 2 else 1
+    // в «Потоке» линзы нет — плоская сетка, как то, что выглядывало под лентой (сразу, без перехода линзы)
+    if (isFlow && !ctl.pinching) ctl.lens = 0f
+    // где кончается самая свежая строка ленты (от неё выглядывает «Поток»)
+    fun feedBottom(): Float? {
+        val lo = ctl.grid.layoutInfo
+        return lo.visibleItemsInfo.lastOrNull { it.index == lo.totalItemsCount - 1 }
+            ?.let { (it.offset.y + it.size.height - lo.viewportStartOffset).toFloat() }
+    }
+    // где в открытом «Потоке» стоит заголовок — туда доезжает вытянутый кусок
+    val flowHeadY = with(density) { (top + 8.dp).toPx() }
+    val peekGap = with(density) { FlowPeekGap.dp.toPx() }
+    ctl.closeFlow = {
+        val base = ctl.lastBase
+        if (base != null) { ctl.peekBase = base; flowPull.floatValue = ctl.lastPull }
+        s.open(null)
+    }
     val physics = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
@@ -359,10 +397,14 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 if (d <= 0f) return androidx.compose.ui.unit.Velocity.Zero
                 flowClick.ready = false
                 if (d >= flowAt) {
-                    // вытянул — «Поток» доезжает вверх и открывается целиком
-                    androidx.compose.animation.core.animate(d, d + flowAt * 1.2f, animationSpec = spring(1f, 900f)) { v, _ -> flowPull.floatValue = v }
+                    // вытянул — кусок доезжает ровно туда, где в открытом «Потоке» стоит заголовок, и в тот кадр, когда
+                    // «Поток» готов, подменяется им самим: те же кадры, тот же порядок и вид — без склейки
+                    val base = feedBottom() ?: (flowHeadY + d)
+                    ctl.peekBase = base
+                    val target = base + peekGap - flowHeadY
+                    ctl.lastBase = base; ctl.lastPull = target
+                    androidx.compose.animation.core.animate(d, target, animationSpec = spring(1f, 480f)) { v, _ -> flowPull.floatValue = v }
                     s.open(Filter.Flow)
-                    flowPull.floatValue = 0f
                 } else androidx.compose.animation.core.animate(d, 0f, animationSpec = spring(0.8f, 500f)) { v, _ -> flowPull.floatValue = v.coerceAtLeast(0f) }
                 return available
             }
@@ -377,10 +419,16 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         val zoomed = feed.cols != prevCols; prevCols = feed.cols
         // смена ступени — не повод уезжать в конец ленты: кадр под пальцами держит applyAnchor
         if (anchor == null && !zoomed && !ctl.pinching && feed.cells.isNotEmpty() && (fresh || ctl.atEnd)) {
-            // лента — на самом свежем внизу; «Поток» — на самом свежем сверху
-            // «Поток» — с первой строки прямо под капсулой (поле сверху в полэкрана — для линзы, не для открытия)
-            if (s.filter == Filter.Flow) ctl.grid.requestScrollToItem(0, ctl.topShift) else ctl.grid.requestScrollToItem(feed.feedEnd.coerceAtLeast(0))
-            ctl.placed = true; ctl.shownFilter = s.filter
+            // лента — на самом свежем внизу; «Поток» — на самом свежем сверху, с первой строки
+            if (feed.filter == Filter.Flow) ctl.grid.requestScrollToItem(0) else ctl.grid.requestScrollToItem(feed.feedEnd.coerceAtLeast(0))
+            if (fresh) androidx.compose.runtime.withFrameNanos { }   // раскладка на новом месте — до того, как её покажут
+            ctl.placed = true; ctl.shownFilter = feed.filter
+            if (fresh && feed.filter == Filter.Flow) { flowPull.floatValue = 0f; ctl.peekBase = null }
+            if (fresh && feed.filter == null && flowPull.floatValue > 0f) {
+                // закрыли «Поток» — он опускается обратно под ленту и снова бледнеет
+                androidx.compose.animation.core.animate(flowPull.floatValue, 0f, animationSpec = spring(1f, 420f)) { v, _ -> flowPull.floatValue = v }
+                ctl.peekBase = null
+            }
         }
     }
 
@@ -414,7 +462,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                             val t = it.offset.y - lo.viewportStartOffset
                             pivot.x >= it.offset.x && pivot.x < it.offset.x + it.size.width && pivot.y >= t && pivot.y < t + it.size.height
                         } ?: lo.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.offset.y - lo.viewportStartOffset + it.size.height / 2f - pivot.y) }
-                        val cell = info?.let { ctl.cells.getOrNull(it.index) } as? Cell.Tile ?: return
+                        val cell = info?.let { ctl.cells.getOrNull(it.index - ctl.lead) } as? Cell.Tile ?: return
                         val t = info.offset.y - lo.viewportStartOffset
                         held = Triple(cell.item.id, ((pivot.x - info.offset.x) / info.size.width).coerceIn(0f, 1f), ((pivot.y - t) / info.size.height).coerceIn(0f, 1f))
                     }
@@ -433,7 +481,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     fun applyRange(at: Offset) {
                         val hit = ctl.hit(at) ?: return
                         val tiles = ctl.cells
-                        val a = dragAnchor; val b = hit.index
+                        val a = dragAnchor; val b = hit
                         if (a < 0) return
                         val (lo, hi) = if (a <= b) a to b else b to a
                         val ids = (lo..hi).flatMap { (tiles.getOrNull(it) as? Cell.Tile)?.let(::idsOf) ?: emptyList() }
@@ -445,9 +493,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     }
                     fun startSelecting(): Boolean {
                         val h = ctl.hit(down.position)
-                        val cell = h?.let { ctl.cells.getOrNull(it.index) } as? Cell.Tile ?: return false
+                        val cell = h?.let { ctl.cells.getOrNull(it) } as? Cell.Tile ?: return false
                         selecting = true
-                        dragAnchor = h.index
+                        dragAnchor = h
                         base = s.selection
                         adding = cell.item.id !in base
                         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -475,7 +523,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                                 }
                             }
                             if (!moved && !pinching && ev.changes.none { it.isConsumed }) {
-                                ctl.hit(down.position)?.let { tap(s, ctl, it.index) }
+                                ctl.hit(down.position)?.let { tap(s, ctl, it) }
                             }
                             return true
                         }
@@ -541,10 +589,12 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     ) {
         // фото идут под строку состояния; место сверху — только под капсулу фильтра
         // пружина капсулы проскакивает ноль — отступ отрицательным не бывает
-        val padTop = (top + 56.dp) * capsule.coerceIn(0f, 1f)
+        // в «Потоке» капсулы нет — сверху его заголовок прямо под строкой состояния
+        val padTop = if (isFlow) top + 8.dp else (top + 56.dp) * capsule.coerceIn(0f, 1f)
         // под линзой лента ходит «по магнитам»: после прокрутки ближайший ряд встаёт ровно в центр экрана.
         // Поля сверху и снизу — по полэкрана: и самый старый, и самый свежий ряд тоже доезжают до центра линзы
-        val lensOn = Lens.strengthFor(feed.cols) > 0f
+        val lensOn = Lens.strengthFor(feed.cols) > 0f && !isFlow
+        ctl.flat = isFlow
         val center = remember(feed.cols, lensOn) { CenterSnap }
         val snap = androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior(
             remember(ctl.grid, center) { androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider(ctl.grid, center) }
@@ -554,8 +604,6 @@ fun FeedScreen(s: Still, ctl: FeedController) {
         // (внутри BoxWithConstraints оно считалось бы на этапе раскладки — позже докрутки к кадру под пальцами)
         ctl.tilePx = if (area.width > 0) ((area.width - with(density) { gapFor(feed.cols).toPx() } * (feed.cols - 1)) / feed.cols).toInt() else 0
         val half = if (lensOn && area.height > 0) with(density) { ((area.height - area.width / feed.cols) / 2f).coerceAtLeast(0f).toDp() } else 0.dp
-        // под капсулу — во всю её высоту (в миг открытия она ещё выезжает, и её текущий размер — ноль)
-        ctl.topShift = with(density) { (half - (top + 56.dp)).toPx().coerceAtLeast(0f).toInt() }
         LazyVerticalGrid(
             columns = GridCells.Fixed(feed.cols),
             state = ctl.grid,
@@ -563,7 +611,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 val k = (feed.cols / vcols.value).coerceIn(0.35f, 3f)
                 scaleX = k; scaleY = k
                 translationX = panX.floatValue
-                translationY = -flowPull.floatValue
+                translationY = if (isFlow) 0f else -flowPull.floatValue
+                // лента ещё не встала на место для этих ячеек — её не видно (вместо неё — вытянутый кусок)
+                alpha = if (ctl.shownFilter == feed.filter && ctl.placed) 1f else 0f
                 transformOrigin = TransformOrigin(
                     (pivot.x / size.width.coerceAtLeast(1f)).coerceIn(0f, 1f),
                     (pivot.y / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f),
@@ -574,15 +624,12 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols)),
             // кадров меньше, чем экран, — они лежат внизу, у знака, а не висят сверху
             // «Поток» — сверху вниз (самое свежее сверху); его кадров меньше экрана — лежат сверху
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols), if (s.filter == Filter.Flow) Alignment.Top else Alignment.Bottom),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gapFor(feed.cols), if (isFlow) Alignment.Top else Alignment.Bottom),
         ) {
-            if (s.filter == Filter.Flow) {
-                val old = s.oldScreens()
-                if (old.isNotEmpty()) item(key = "suggest", span = { GridItemSpan(maxLineSpan) }) {
-                    FlowSuggestion(old.size) { s.trash(old) }
-                }
-                // срок до «Потока» — наверху, рядом с самым свежим
-                item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) { FlowTimer(s) }
+            if (isFlow) {
+                // тот же заголовок, что выглядывал под лентой; «уходят через…» раскрывает ползунок срока
+                item(key = "flow-head", span = { GridItemSpan(maxLineSpan) }) { FlowHead(s, timerOpen, onTimer = { timerOpen = !timerOpen }, onClose = { ctl.closeFlow() }) }
+                if (timerOpen) item(key = "flow-timer", span = { GridItemSpan(maxLineSpan) }) { FlowTimer(s) }
             }
             val n = feed.cells.size
             items(
@@ -603,16 +650,21 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                     )
                 }
             }
+            if (isFlow) {
+                // старые скриншоты — в конце «Потока»: сверху он начинается ровно с того, что выглядывало под лентой
+                val old = s.oldScreens()
+                if (old.isNotEmpty()) item(key = "suggest", span = { GridItemSpan(maxLineSpan) }) {
+                    FlowSuggestion(old.size) { s.trash(old) }
+                }
+            }
         }
         if (s.loaded && feed.cells.isEmpty() && s.filter != Filter.Flow) Empty(s.filter)
         // «Поток» выглядывает под самым свежим рядом — бледный и размытый; вытягиваешь — проявляется
-        if (s.filter == null && s.flowPeek.isNotEmpty() && !ctl.zooming) FlowPeek(
+        // и пока «Поток» открывается или закрывается — на месте его заголовка, пока сама лента не встала
+        val gridReady = ctl.shownFilter == feed.filter && ctl.placed
+        if (s.flowPeek.isNotEmpty() && !ctl.zooming && (feed.filter == null || !gridReady) && s.filter in listOf(null, Filter.Flow)) FlowPeek(
             s, ctl,
-            bottomOfFeed = {
-                val lo = ctl.grid.layoutInfo
-                lo.visibleItemsInfo.lastOrNull { it.index == lo.totalItemsCount - 1 }
-                    ?.let { (it.offset.y + it.size.height - lo.viewportStartOffset).toFloat() }
-            },
+            bottomOfFeed = { ctl.peekBase ?: feedBottom() },
             pull = { flowPull.floatValue },
         )
         // строка состояния над фото: лёгкая тень и светлые значки — без белого тумана поверх кадров
@@ -621,7 +673,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             Modifier.fillMaxWidth().height(top + 20.dp).graphicsLayer { alpha = scrim }
                 .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.34f), Color.Black.copy(alpha = 0f))))
         )
-        FilterCapsule(s, top, capsule)
+        FilterCapsule(s, top, if (s.filter == Filter.Flow) 0f else capsule)
         FastScroll(s, ctl, top, bottom)
     }
 }
@@ -682,7 +734,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 // пройдя пятую часть экрана
                 val cy = spot.y + spot.h / 2f; val vh = vp.height.toFloat()
                 val edge = edgeClarity(cy, vh)
-                val clear = edge
+                val clear = if (ctl.flat) 1f else edge
                 if (clear < 0.999f && !leaving) {
                     alpha *= 0.3f + 0.7f * clear
                     renderEffect = ctl.flowBlur((1f - clear) * 6.dp.toPx())
@@ -797,8 +849,12 @@ internal fun androidx.compose.foundation.layout.BoxScope.VideoBadge(ms: Long) {
 @Composable
 private fun FlowSuggestion(n: Int, onClean: () -> Unit) {
     val p = LocalPalette.current
+    // выглядывавший кусок её не рисовал — после подмены она проявляется, а не выскакивает
+    val show = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { show.animateTo(1f, tween(260)) }
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).clip(SquircleShape(Radius.m)).background(p.sheet)
+        Modifier.fillMaxWidth().graphicsLayer { alpha = show.value }
+            .padding(horizontal = 10.dp, vertical = 6.dp).clip(SquircleShape(Radius.m)).background(p.sheet)
             .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
