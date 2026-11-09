@@ -242,6 +242,18 @@ class RulesTest {
         assertEquals(4, e[0].members.size)
     }
 
+    /**
+     * Порядок — по времени кадра, а не по тому, как его отдал источник: скриншот без даты съёмки (время — дата
+     * появления) MediaStore ставит в самый конец, как самый старый, — и он уезжал на самый верх ленты.
+     */
+    @Test fun orderFollowsTimeNotSourceOrder() {
+        val old = item(1, taken = now - 10 * day); val mid = item(2, taken = now - 5 * day)
+        val shot = item(3, Source.SCREENSHOT, taken = now - day)
+        // как отдаёт MediaStore при пустой дате съёмки: свежий скриншот — последним
+        val e = Moments.build(listOf(mid, old, shot), { null })
+        assertEquals(listOf(3L, 2L, 1L), e.map { it.cover.id })
+    }
+
     /** Без векторов (ещё не посчитаны) — каждый кадр сам по себе, ничего не склеивается наугад. */
     @Test fun withoutVectorsNothingStacks() {
         val asc = timeline(now, listOf(0, 1, 1, 1))

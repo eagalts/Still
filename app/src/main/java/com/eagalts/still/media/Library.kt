@@ -90,6 +90,9 @@ class MediaStoreLibrary(ctx: Context) : Library {
                 )
             }
         }
+        // у скриншотов и сохранёнок часто нет даты съёмки: время для них — дата появления, но MediaStore уже
+        // отсортировал их по пустой дате — в самый конец, как самые старые, и они уезжали на самый верх ленты
+        out.sortByDescending { it.taken }
         return out
     }
 

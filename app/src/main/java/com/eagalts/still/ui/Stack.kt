@@ -78,14 +78,42 @@ import kotlinx.coroutines.launch
  * Доли — от стороны плитки: поля, скругление, белая кромка, тень; у нижних карточек — поворот, сдвиг и притемнение.
  */
 object Pile {
-    const val MARGIN = 0.08f
     const val RADIUS = 0.07f
     const val EDGE = 0.022f
     const val DROP = 0.014f
     class Card(val deg: Float, val dx: Float, val dy: Float, val dim: Float)
-    val TOP = Card(0f, 0f, 0f, 0f)
-    val B1 = Card(6f, 0.018f, -0.006f, 0.12f)
-    val B2 = Card(-8f, -0.018f, 0.008f, 0.22f)
+    /**
+     * Вид стопки: наклон верхнего снимка и нижних карточек (второй нижней нет, если в стопке два кадра) и поля —
+     * ровно под эти наклоны: стопка как можно крупнее и не залезает на соседние кадры.
+     */
+    class Look(val top: Card, val b1: Card, val b2: Card?, val margin: Float)
+
+    /**
+     * Каждая стопка — своя: наклоны и сдвиги задаёт сама стопка (её ключ), поэтому одна и та же стопка всегда
+     * выглядит одинаково, а соседние — по-разному: нижние карточки выглядывают то влево, то вправо, под разными
+     * углами, верхний снимок чуть наклонён.
+     */
+    fun look(key: Long, count: Int): Look {
+        val r = java.util.Random(key * 0x9E3779B97F4A7C15uL.toLong() + 17)
+        fun u(a: Float, b: Float) = a + r.nextFloat() * (b - a)
+        val side = if (r.nextBoolean()) 1f else -1f
+        val top = Card(u(-2.2f, 2.2f), 0f, 0f, 0f)
+        // куда выглядывают нижние: в свою сторону и под своим углом (вбок, вниз, вверх)
+        fun peek(sign: Float, deg: Float, dim: Float): Card {
+            val a = u(-0.9f, 0.9f)
+            val d = u(0.008f, 0.018f)
+            return Card(sign * deg, sign * d * kotlin.math.cos(a), d * kotlin.math.sin(a), dim)
+        }
+        val b1 = peek(side, u(3f, 7.5f), 0.12f)
+        val b2 = if (count >= 3) peek(-side, u(3.5f, 7.5f), 0.22f) else null
+        // поля: насколько угол повёрнутой карточки и тень выходят за ровный квадрат (половина стороны ≈ 0.44)
+        fun reach(c: Card): Float {
+            val t = Math.toRadians(kotlin.math.abs(c.deg).toDouble())
+            return (0.44 * (kotlin.math.sin(t) + kotlin.math.cos(t) - 1)).toFloat() + maxOf(kotlin.math.abs(c.dx), kotlin.math.abs(c.dy))
+        }
+        val m = (listOfNotNull(top, b1, b2).maxOf(::reach) + DROP * 0.5f).coerceIn(0.045f, 0.085f)
+        return Look(top, b1, b2, m)
+    }
     fun paper(p: Palette) = if (p.dark) Color(0xFFECEAE5) else Color.White
     fun shadow(p: Palette) = Color.Black.copy(alpha = if (p.dark) 0.42f else 0.2f)
 
@@ -100,6 +128,7 @@ object Pile {
 /** Пути карточек стопки — один раз на размер плитки, не на каждом кадре. */
 class PileCache {
     var side = -1f
+    var margin = -1f
     val outer = Path()
     val inner = Path()
     var innerRect = Rect.Zero
@@ -111,13 +140,13 @@ class PileCache {
  */
 fun DrawScope.drawPile(
     c: PileCache, cover: ImageBitmap?, b1: ImageBitmap?, b2: ImageBitmap?, ph: Color, p: Palette,
-    @Suppress("UNUSED_PARAMETER") cols: Int, shade: Float, coverOut: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") cols: Int, shade: Float, look: Pile.Look, coverOut: Boolean = false,
 ) {
     val side = size.minDimension
-    if (c.side != side) {
-        c.side = side
+    if (c.side != side || c.margin != look.margin) {
+        c.side = side; c.margin = look.margin
         // поля под повёрнутые карточки: угол 8° выносит угол карточки на ~5,5% стороны, сдвиг — ещё ~2%
-        val m = side * Pile.MARGIN
+        val m = side * look.margin
         val r = (side * Pile.RADIUS).coerceIn(2.dp.toPx(), 10.dp.toPx())
         val edge = (side * Pile.EDGE).coerceIn(1.dp.toPx(), 2.5.dp.toPx())
         val card = Rect(m, m, side - m, side - m)
@@ -140,10 +169,10 @@ fun DrawScope.drawPile(
         }
     }
     // повороты и сдвиги подобраны так, чтобы углы карточек и тень оставались в полях 8%
-    card(b2, Pile.B2.deg, Pile.B2.dx, Pile.B2.dy, Pile.B2.dim)
-    card(b1, Pile.B1.deg, Pile.B1.dx, Pile.B1.dy, Pile.B1.dim)
+    look.b2?.let { card(b2, it.deg, it.dx, it.dy, it.dim) }
+    card(b1, look.b1.deg, look.b1.dx, look.b1.dy, look.b1.dim)
     // стопка открыта — верхний снимок «вынут» (он сейчас в сетке стопки), нижние лежат на месте
-    if (!coverOut) card(cover, 0f, 0f, 0f, 0f)
+    if (!coverOut) card(cover, look.top.deg, look.top.dx, look.top.dy, 0f)
     if (shade > 0.01f) drawRect(p.page, alpha = shade)
 }
 
@@ -169,6 +198,7 @@ fun StackView(s: Still, ctl: FeedController) {
     val slots = remember { androidx.compose.runtime.mutableStateMapOf<Long, Rect>() }
     val grid = rememberLazyGridState()
     val (b1, b2) = remember(e) { Pile.backs(e) }
+    val look = remember(e) { Pile.look(e.key, e.members.size) }
     // во время полёта сетка спрятана — кадры летят отдельным слоем поверх всего (сетка обрезала бы их по краю)
     val settled by remember { androidx.compose.runtime.derivedStateOf { open.value >= 0.999f && !closing } }
 
@@ -284,7 +314,7 @@ fun StackView(s: Still, ctl: FeedController) {
                 itemsIndexed(members, key = { _, m -> m.id }) { _, m -> StackTile(s, m, slots) { settled } }
             }
         }
-        if (!settled) StackFlight(s, ctl, e, b1, b2, slots, { open.value })
+        if (!settled) StackFlight(s, ctl, e, b1, b2, look, slots, { open.value })
     }
 }
 
@@ -295,7 +325,7 @@ fun StackView(s: Still, ctl: FeedController) {
  */
 @Composable
 private fun StackFlight(
-    s: Still, ctl: FeedController, e: com.eagalts.still.media.Entry, b1: MediaItem?, b2: MediaItem?,
+    s: Still, ctl: FeedController, e: com.eagalts.still.media.Entry, b1: MediaItem?, b2: MediaItem?, look: Pile.Look,
     slots: MutableMap<Long, Rect>, open: () -> Float,
 ) {
     val p = LocalPalette.current
@@ -304,8 +334,8 @@ private fun StackFlight(
         var drawn = false
         for (m in order) {
             val slot = slots[m.id] ?: continue
-            val card = when (m) { e.cover -> Pile.TOP; b1 -> Pile.B1; b2 -> Pile.B2; else -> Pile.TOP }
-            FlyingCard(s, ctl, m, slot, card, open, p)
+            val card = when (m) { e.cover -> look.top; b1 -> look.b1; b2 -> look.b2 ?: look.top; else -> look.top }
+            FlyingCard(s, ctl, m, slot, card, look.margin, open, p)
             drawn = true
         }
         // стопка в ленте уходит ровно в тот кадр, когда её подменили карточки (места в сетке уже измерены)
@@ -314,7 +344,7 @@ private fun StackFlight(
 }
 
 @Composable
-private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rect, card: Pile.Card, open: () -> Float, p: Palette) {
+private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rect, card: Pile.Card, margin: Float, open: () -> Float, p: Palette) {
     val density = LocalDensity.current
     val bmp = rememberThumb(s, item, 320)
     val ph = placeholder(s, item, p)
@@ -329,7 +359,7 @@ private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rec
                 val from = ctl.stackFrom ?: return@graphicsLayer
                 // где эта карточка лежит в стопке на экране: поля, сдвиг, наклон — как в drawPile
                 val side = from.width
-                val c = from.deflate(side * Pile.MARGIN).translate(card.dx * side, card.dy * side)
+                val c = from.deflate(side * margin).translate(card.dx * side, card.dy * side)
                 val sc = (c.width / slot.width + (1f - c.width / slot.width) * f).coerceAtLeast(0f)
                 scaleX = sc; scaleY = sc
                 translationX = (c.center.x - slot.center.x) * (1f - f)
@@ -341,7 +371,7 @@ private fun FlyingCard(s: Still, ctl: FeedController, item: MediaItem, slot: Rec
                 val from = ctl.stackFrom
                 val side = from?.width ?: size.width
                 // всё в долях стороны стопки на экране, переведённое в масштаб этой плитки (слой её сожмёт)
-                val sc = if (from == null) 1f else ((side * (1f - 2 * Pile.MARGIN)) / size.width).let { it + (1f - it) * f }.coerceAtLeast(0.05f)
+                val sc = if (from == null) 1f else ((side * (1f - 2 * margin)) / size.width).let { it + (1f - it) * f }.coerceAtLeast(0.05f)
                 val k = 1f - f
                 val pileR = (side / ctl.pileScale() * Pile.RADIUS).coerceIn(2.dp.toPx(), 10.dp.toPx()) * ctl.pileScale()
                 val r = (pileR + (gridR - pileR) * f) / sc

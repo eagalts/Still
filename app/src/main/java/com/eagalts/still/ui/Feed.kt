@@ -659,7 +659,7 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
                 val clear = if (c.flow) minOf(edge, flowClarity(cy, vh)) else edge
                 if (clear < 0.999f && !leaving) {
                     alpha *= if (c.flow) 0.22f + 0.78f * clear else 0.3f + 0.7f * clear
-                    renderEffect = ctl.flowBlur((1f - clear) * (if (c.flow) 14.dp.toPx() else 10.dp.toPx()))
+                    renderEffect = ctl.flowBlur((1f - clear) * (if (c.flow) 11.dp.toPx() else 6.dp.toPx()))
                 } else renderEffect = null
                 // скругление — обрезкой слоя видеокартой (без контуров на каждом кадре); радиус не зависит
                 // от скорости прокрутки, только от силы линзы и выбора — меняется редко, форма берётся из кэша
@@ -676,11 +676,12 @@ private fun Tile(s: Still, ctl: FeedController, c: Cell.Tile, index: Int, cols: 
         val dust = remember(leaving, bmp.value) { if (leaving) bmp.value?.let(::dustOf) else null }
         // под обложкой — два других кадра стопки, маленькими миниатюрами (их почти не видно, крупнее не нужно)
         val backs = if (stacked) Pile.backs(c.entry) else null to null
+        val look = remember(c.entry.key, c.entry.members.size) { Pile.look(c.entry.key, c.entry.members.size) }
         val back1 = backs.first?.let { rememberThumb(s, it, 160) }
         val back2 = backs.second?.let { rememberThumb(s, it, 160) }
         if (stacked && !leaving) Spacer(
             Modifier.fillMaxSize().drawBehind {
-                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, 0f)
+                drawPile(pile, bmp.value?.takeIf { shown > 0f }, back1?.value, back2?.value, placeholder(s, item, p), p, cols, 0f, look)
             }
         ) else Spacer(
             Modifier.fillMaxSize().drawBehind {

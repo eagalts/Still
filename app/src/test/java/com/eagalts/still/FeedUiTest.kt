@@ -853,6 +853,9 @@ class FeedUiTest {
         assertTrue("у верхнего края кадр не бледный: $atEdge", atEdge > 60)
         rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == top }, 0) }
         rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        // миниатюры ставших видимыми кадров декодируются в фоне — дождаться их, а не сравнивать с заглушкой
+        repeat(20) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(10) }
+        rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
         val centered = diff(top)
         assertTrue("в середине кадр не проявился: $centered", centered in 0..40)
     }

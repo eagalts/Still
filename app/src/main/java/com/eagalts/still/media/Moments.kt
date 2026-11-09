@@ -120,7 +120,8 @@ object Moments {
     fun build(items: List<MediaItem>, vec: (Long) -> ByteArray?, cache: MutableMap<Long, IntArray>? = null): List<Entry> {
         val n = items.size
         if (n == 0) return emptyList()
-        val asc = items.asReversed()
+        // по возрастанию времени — даже если дали не по порядку (порядок источника и время кадра могут расходиться)
+        val asc = items.sortedBy { it.taken }
         val times = LongArray(n) { asc[it].taken }
         val out = outings(times)
         val group = IntArray(n) { -1 }
