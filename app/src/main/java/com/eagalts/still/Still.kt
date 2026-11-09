@@ -47,19 +47,14 @@ sealed class Filter {
  */
 sealed class Cell {
     abstract val key: Any
-    /** [flow] — кадр «Потока»: он лежит под лентой, бледный и размытый, и проявляется, когда долистываешь до него. */
-    class Tile(val entry: Entry, val item: MediaItem, val label: String? = null, val flow: Boolean = false) : Cell() {
+    class Tile(val entry: Entry, val item: MediaItem, val label: String? = null) : Cell() {
         override val key: Any get() = item.id
-    }
-    /** Заголовок «Потока» под самым свежим кадром ленты. */
-    class FlowHeader(val count: Int) : Cell() {
-        override val key: Any get() = "flow-header"
     }
 }
 
-/** [feedEnd] — последняя ячейка самой ленты (дальше — «Поток»): лента открывается на ней, а не в конце «Потока». */
+/** [feedEnd] — последняя ячейка ленты: лента открывается на ней (на самом свежем). */
 class Feed(val cells: List<Cell>, val cols: Int, val gen: Int) {
-    val feedEnd: Int = cells.indexOfFirst { it is Cell.FlowHeader }.let { if (it < 0) cells.size - 1 else it - 1 }
+    val feedEnd: Int = cells.size - 1
 }
 
 /**
@@ -190,6 +185,9 @@ class Still(
     private var printJob: Job? = null
     /** Версия отпечатков и векторов: растёт, когда досчитана порция, — стопки надо склеить заново. */
     @Volatile private var printVersion = 0
+    /** Что выглядывает из «Потока» под лентой: его записи, самое свежее первым (считается при сборке ленты). */
+    @Volatile private var flowLatest: List<Entry> = emptyList()
+    var flowPeek: List<Entry> by mutableStateOf(emptyList()); private set
     @Volatile private var entryCache: Pair<List<Any?>, Pair<List<Entry>, List<Entry>>>? = null
     /** Сцены посчитанных выходов: выход не изменился — не считаем заново (ключ — состав выхода). */
     private val sceneCache: MutableMap<Long, IntArray> = java.util.Collections.synchronizedMap(
@@ -235,6 +233,7 @@ class Still(
         rebuildJob = scope.launch {
             val built = withContext(Dispatchers.Default) { buildCells(f, items, trashed, kept, cols, t, ttl) }
             feed = Feed(built, cols, feed.gen + 1)
+            if (f == null) flowPeek = flowLatest
             refreshStack(built)
         }
     }
@@ -262,11 +261,12 @@ class Still(
         // стопки — в ленте и альбомах; в поиске и корзине каждый кадр сам по себе
         val newestFirst = if (f == null || f is Filter.Album || f == Filter.Flow) Moments.build(base, vectors::get, sceneCache)
         else base.map { Entry(it, listOf(it)) }
-        // под лентой — «Поток»: то, что из неё уже ушло (в самом «Потоке» как фильтре — не нужно, он и так весь)
+        // под лентой выглядывает «Поток»: то, что из неё уже ушло, самое свежее — первым
         val flowNewestFirst = if (f == null) Moments.build(items.filter { Ephemeral.temporary(it, pp) && !Ephemeral.inFeed(it, t, kept, ttl, pp) }, vectors::get, sceneCache)
         else emptyList()
-        // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple)
-        (newestFirst.asReversed() to flowNewestFirst.asReversed()).also { entryCache = key to it }
+        // лента идёт от старого к новому: самое свежее — внизу, у знака (как в Фото Apple);
+        // «Поток» — наоборот: самое свежее сверху (его вытягивают снизу — первым выезжает новое)
+        ((if (f == Filter.Flow) newestFirst else newestFirst.asReversed()) to flowNewestFirst).also { entryCache = key to it }
         }
         val level = levelOf(cols)
         val out = ArrayList<Cell>(entries.size + entries.size / 8)
@@ -288,10 +288,7 @@ class Still(
             }
             out += Cell.Tile(e, e.cover, label)
         }
-        if (flowEntries.isNotEmpty()) {
-            out += Cell.FlowHeader(flowEntries.sumOf { it.members.size })
-            for (e in flowEntries) out += Cell.Tile(e, e.cover, null, flow = true)
-        }
+        if (f == null) flowLatest = flowEntries
         return out
     }
 
@@ -380,9 +377,7 @@ class Still(
     // ——— просмотр ———
 
     fun view(item: MediaItem) {
-        // листаются кадры того же места: лента — лентой, «Поток» под ней — «Потоком»
-        val inFlow = feed.cells.any { it is Cell.Tile && it.item.id == item.id && it.flow }
-        val list = feed.cells.mapNotNull { (it as? Cell.Tile)?.takeIf { t -> t.flow == inFlow }?.item }
+        val list = feed.cells.mapNotNull { (it as? Cell.Tile)?.item }
         viewing = Viewing(list, list.indexOf(item).coerceAtLeast(0), filter)
     }
 

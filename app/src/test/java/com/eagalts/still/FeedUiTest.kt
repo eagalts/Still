@@ -187,15 +187,16 @@ class FeedUiTest {
     }
 
     private fun feedIds() = still.feed.cells.take(still.feed.feedEnd + 1).filterIsInstance<Cell.Tile>().map { it.item.id }.toSet()
-    private fun flowIds() = still.feed.cells.filterIsInstance<Cell.Tile>().filter { it.flow }.map { it.item.id }.toSet()
+    private fun flowIds() = still.flowPeek.flatMap { e -> e.members.map { it.id } }.toSet()
 
     @Test fun feedHasCameraAndFreshNoiseButNotOld() {
         show()
         val ids = feedIds()
         assertTrue(500L in ids)
         assertTrue((600L..604L).none { it in ids })
-        // ушедшее из ленты лежит под ней, в «Потоке»
+        // ушедшее из ленты выглядывает под ней, в «Потоке» (в прокрутке ленты его нет)
         assertTrue((600L..604L).all { it in flowIds() })
+        assertTrue(still.feed.cells.none { it.key in 600L..604L })
         // серия — одна плитка-стопка, обложка — самый тяжёлый кадр
         assertTrue(103L in ids && 100L !in ids)
         shot("feed-light")
@@ -623,7 +624,7 @@ class FeedUiTest {
         assertTrue(inFeed(500L))
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
-        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size) }
+        rule.runOnIdle { ctl.grid.requestScrollToItem(0) }
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithText("3 дня").assertExists()
         shot("flow-timer")
@@ -635,7 +636,7 @@ class FeedUiTest {
         until { 500L !in feedIds() && still.feed.cells.isNotEmpty() }
         rule.runOnIdle { still.open(Filter.Flow) }
         until { still.feed.cells.isNotEmpty() }
-        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.size) }
+        rule.runOnIdle { ctl.grid.requestScrollToItem(0) }
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithTag("flow-slider").performTouchInput { swipeRight(startX = left + 10f, endX = right) }
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
@@ -761,32 +762,34 @@ class FeedUiTest {
     }
 
     /**
-     * «Поток» лежит под лентой: внизу он бледный и размытый (кадр не похож на себя), долистал его до середины —
-     * чёткий, как сам снимок; сверху капсула «Поток ×», крестик возвращает к свежим кадрам.
+     * «Поток» вытягивают: он выглядывает под самым свежим рядом, лента дальше не листается; чуть потянул — ничего,
+     * вытянул за порог — «Поток» открыт, самое свежее сверху и он открыт сверху.
      */
-    @Test fun flowFadesInBelowFeed() {
+    @Test fun pullOutOpensFlowNewestFirst() {
         show()
-        rule.onNodeWithTag("flow-header").assertExists()
-        fun diffAtCenter(id: Long): Int {
-            val b = shot("flow-$id", settle = false)
-            val r = rule.runOnIdle { ctl.bounds(id) } ?: return -1
-            val t = still.lib.thumbnail(still.all.first { it.id == id }, 256, android.os.CancellationSignal())!!
-            val want = t.getPixel(t.width / 2, t.height / 2); val got = b.getPixel(r.center.x.toInt(), r.center.y.toInt())
-            return kotlin.math.abs(android.graphics.Color.red(want) - android.graphics.Color.red(got)) +
-                kotlin.math.abs(android.graphics.Color.green(want) - android.graphics.Color.green(got)) + kotlin.math.abs(android.graphics.Color.blue(want) - android.graphics.Color.blue(got))
+        rule.onNodeWithTag("flow-peek").assertExists()
+        shot("flow-peek")
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.6f))
+            repeat(5) { moveBy(androidx.compose.ui.geometry.Offset(0f, -12f)) }
+            up()
         }
-        // самый первый кадр «Потока» — сразу под лентой, у нижнего края: бледный
-        val first = (still.feed.cells[still.feed.feedEnd + 2] as Cell.Tile).item.id
-        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
-        val atRest = diffAtCenter(first)
-        assertTrue("внизу кадр «Потока» не бледный: $atRest", atRest > 60)
-        // долистали его до середины — чёткий
-        rule.runOnIdle { ctl.grid.requestScrollToItem(still.feed.cells.indexOfFirst { it.key == first }, 0) }
         rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
-        val centered = diffAtCenter(first)
-        assertTrue("в середине кадр «Потока» не проявился: $centered", centered in 0..40)
-        rule.onNodeWithTag("filter-close").assertExists().performClick()
-        until(3000) { ctl.atEnd }
+        assertEquals(null, still.filter)
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.8f))
+            repeat(30) { moveBy(androidx.compose.ui.geometry.Offset(0f, -25f)) }
+            up()
+        }
+        until(3000) { still.filter == Filter.Flow }
+        until { still.feed.cells.isNotEmpty() }
+        val taken = still.feed.cells.filterIsInstance<Cell.Tile>().map { it.item.taken }
+        assertEquals("в «Потоке» самое свежее не сверху", taken.sortedDescending(), taken)
+        rule.mainClock.advanceTimeBy(800); rule.waitForIdle()
+        val first = (still.feed.cells.first() as Cell.Tile).item.id
+        assertTrue("«Поток» открылся не сверху", rule.runOnIdle { ctl.grid.layoutInfo.visibleItemsInfo.any { it.key == first } })
+        shot("flow-open")
     }
 
     /** Резкость кадра на экране: самые сильные перепады цвета (верхний 1%) — есть ли в нём чёткие края. */
