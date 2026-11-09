@@ -162,6 +162,8 @@ class FeedController(val grid: LazyGridState) {
     /** Закрыть «Поток» — тем же движением назад (если его вытягивали). */
     var closeFlow: () -> Unit = {}
     var atEnd = true
+    /** Для тестов: строка состояния (в Robolectric её нет; на телефоне её высота приходит после первого кадра). */
+    var testTop by mutableStateOf<androidx.compose.ui.unit.Dp?>(null)
     /** Размер плитки в пикселях — считается один раз на раскладку, а не в каждой плитке. */
     var tilePx = 0
     private val shapes = HashMap<Int, androidx.compose.ui.graphics.Shape>()
@@ -270,7 +272,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     ctl.cells = feed.cells; ctl.cols = feed.cols
     val appCtx = androidx.compose.ui.platform.LocalContext.current
     ctl.weak = remember { (appCtx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)?.isLowRamDevice == true }
-    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val top = ctl.testTop ?: WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val capsule by animateFloatAsState(if (s.filter != null) 1f else 0f, fineSpring(0.86f, 420f), label = "capsule")
     val ambient by androidx.compose.animation.animateColorAsState(ctl.ambient ?: p.page, tween(700), label = "ambient")
@@ -323,7 +325,7 @@ fun FeedScreen(s: Still, ctl: FeedController) {
     }
     // фото под строкой состояния? тогда значки светлые и под ними тень; лента короче экрана — как обычно
     val topPx = with(density) { top.toPx() }
-    val overPhotos by remember {
+    val overPhotos by remember(topPx) {
         androidx.compose.runtime.derivedStateOf {
             val first = ctl.grid.layoutInfo.visibleItemsInfo.firstOrNull()
             first != null && first.offset.y - ctl.grid.layoutInfo.viewportStartOffset < topPx * 0.5f && s.filter == null
@@ -363,7 +365,8 @@ fun FeedScreen(s: Still, ctl: FeedController) {
             ?.let { (it.offset.y + it.size.height - lo.viewportStartOffset).toFloat() }
     }
     // где в открытом «Потоке» стоит заголовок — туда доезжает вытянутый кусок
-    val flowHeadY = with(density) { (top + 8.dp).toPx() }
+    // жесты ниже запомнены один раз — а высота строки состояния приходит после первого кадра: читать свежую
+    val flowHeadYNow = androidx.compose.runtime.rememberUpdatedState(with(density) { (top + 8.dp).toPx() })
     val peekGap = with(density) { FlowPeekGap.dp.toPx() }
     ctl.closeFlow = {
         val base = ctl.lastBase
@@ -399,9 +402,9 @@ fun FeedScreen(s: Still, ctl: FeedController) {
                 if (d >= flowAt) {
                     // вытянул — кусок доезжает ровно туда, где в открытом «Потоке» стоит заголовок, и в тот кадр, когда
                     // «Поток» готов, подменяется им самим: те же кадры, тот же порядок и вид — без склейки
-                    val base = feedBottom() ?: (flowHeadY + d)
+                    val base = feedBottom() ?: (flowHeadYNow.value + d)
                     ctl.peekBase = base
-                    val target = base + peekGap - flowHeadY
+                    val target = base + peekGap - flowHeadYNow.value
                     ctl.lastBase = base; ctl.lastPull = target
                     androidx.compose.animation.core.animate(d, target, animationSpec = spring(1f, 480f)) { v, _ -> flowPull.floatValue = v }
                     s.open(Filter.Flow)

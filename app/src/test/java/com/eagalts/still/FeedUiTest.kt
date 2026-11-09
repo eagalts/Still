@@ -14,6 +14,7 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -623,18 +624,44 @@ class FeedUiTest {
      * сетки сдвинут заголовком), нажатие на заголовок не открывает никакого фото.
      */
     @Test fun flowTapOpensTheTappedPhoto() {
+        // три скриншота одной минуты и одной сцены (ушли в «Поток»): в «Потоке» есть стопка, как у владельца
+        val shots = (0 until 3).map { mk(800L + it, now - 10 * day - it * 20_000L, Source.SCREENSHOT, w = 1080, h = 2400, bucket = 9) }
+        still = Still(rule.activity, FakeLibrary((items() + shots).sortedByDescending { it.taken }), Index(null), MainScope(), now = { now }, vectors = sceneVectors().apply {
+            val r = java.util.Random(5)
+            val c = FloatArray(1024) { r.nextGaussian().toFloat() }
+            for (id in 800L..802L) put(id, com.eagalts.still.media.Embedder.quantize(FloatArray(1024) { c[it] + 0.3f * r.nextGaussian().toFloat() }))
+        })
+        still.access = Access.FULL
         show()
-        rule.runOnIdle { still.open(Filter.Flow) }
+        rule.runOnIdle { ctl.testTop = 46.dp }
+        rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
+        // «Поток» открыт вытягиванием, как у владельца (а не сразу фильтром)
+        val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("feed").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(box.width / 2f, box.height * 0.8f))
+            repeat(30) { moveBy(androidx.compose.ui.geometry.Offset(0f, -25f)) }
+            up()
+        }
         until { still.feed.filter == Filter.Flow && still.feed.cells.isNotEmpty() && ctl.placed }
         rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
         rule.onNodeWithTag("flow-head").performClick()
         rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
         assertTrue("нажатие на заголовок открыло фото", still.viewing == null)
-        val first = still.feed.cells.first() as com.eagalts.still.Cell.Tile
-        val r = rule.runOnIdle { ctl.feedBounds(first.item.id)!! }
-        rule.onNodeWithTag("feed").performTouchInput { click(androidx.compose.ui.geometry.Offset(r.center.x - ctl.origin.x, r.center.y - ctl.origin.y)) }
-        rule.mainClock.advanceTimeBy(500); rule.waitForIdle()
-        assertEquals(first.item.id, still.viewing?.let { it.items[it.start].id })
+        // каждый кадр «Потока» открывается своим нажатием
+        assertTrue("в «Потоке» нет стопки", still.feed.cells.any { (it as? com.eagalts.still.Cell.Tile)?.entry?.stacked == true })
+        for (c in still.feed.cells.filterIsInstance<com.eagalts.still.Cell.Tile>()) {
+            val r = rule.runOnIdle { ctl.feedBounds(c.item.id) } ?: continue
+            rule.onNodeWithTag("feed").performTouchInput { click(androidx.compose.ui.geometry.Offset(r.center.x - ctl.origin.x, r.center.y - ctl.origin.y)) }
+            rule.mainClock.advanceTimeBy(700); rule.waitForIdle()
+            if (c.entry.stacked) {
+                assertTrue("стопка «Потока» не открылась", still.stack != null)
+                rule.runOnIdle { still.closeStack() }
+            } else {
+                assertEquals(c.item.id, still.viewing?.let { it.items[it.start].id })
+                rule.runOnIdle { still.viewing = null }
+            }
+            rule.mainClock.advanceTimeBy(900); rule.waitForIdle()
+        }
     }
 
     @Test fun flowSliderChangesWhatLeaves() {
@@ -894,6 +921,9 @@ class FeedUiTest {
      */
     @Test fun pulledFlowBecomesFlowWithoutSeam() {
         show()
+        // строка состояния, как на телефоне: её высота приходит уже после первого кадра
+        rule.runOnIdle { ctl.testTop = 46.dp }
+        rule.mainClock.advanceTimeBy(300); rule.waitForIdle()
         val box = rule.onNodeWithTag("feed").fetchSemanticsNode().boundsInRoot
         rule.mainClock.autoAdvance = false
         rule.onNodeWithTag("feed").performTouchInput {
@@ -911,7 +941,7 @@ class FeedUiTest {
         }
         assertTrue("«Поток» не открылся", after != null && before != null)
         // сравниваем заголовок и два первых ряда
-        val top = (box.height * 0.02f).toInt(); val bottom = (box.height * 0.55f).toInt()
+        val top = (box.height * 0.01f).toInt(); val bottom = (box.height * 0.55f).toInt()
         var sum = 0L; var n = 0
         var y = top; while (y < bottom) { var x = 0; while (x < before!!.width) {
             val p = before.getPixel(x, y); val q = after!!.getPixel(x, y)
